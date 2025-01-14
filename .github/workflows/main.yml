@@ -35,14 +35,19 @@ jobs:
         key: ${{ secrets.SSH_PRIVATE_KEY }}
         known_hosts: ${{ secrets.SSH_KNOWN_HOSTS }}
     
-    # 將檔案傳輸到 EC2 並重啟服務
+    # 修改部署步驟
     - name: Deploy to EC2
       run: |
         # 創建臨時部署目錄
         mkdir deploy_temp
         
-        # 複製需要的文件到臨時目錄
-        cp -r !(node_modules|.git|deploy_temp) deploy_temp/
+        # 使用更簡單的方式複製文件
+        rsync -av \
+          --exclude='node_modules' \
+          --exclude='.git' \
+          --exclude='deploy_temp' \
+          --exclude='deploy.tar.gz' \
+          . deploy_temp/
         
         # 進入臨時目錄打包
         cd deploy_temp
