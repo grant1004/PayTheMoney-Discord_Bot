@@ -109,7 +109,7 @@ client.on('interactionCreate', async interaction => {
         } catch (error) {
             console.error('Error handling modal submit:', error);
             await interaction.reply({
-                content: '處理記錄時發生錯誤，請稍後再試。',
+                content: '處理記錄時發生錯誤，請稍後再試去你的。',
                 ephemeral: true
             });
         }
