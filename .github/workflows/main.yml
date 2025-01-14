@@ -38,8 +38,16 @@ jobs:
     # 將檔案傳輸到 EC2 並重啟服務
     - name: Deploy to EC2
       run: |
-        # 打包專案檔案（排除 node_modules）
-        tar -czf deploy.tar.gz --exclude=node_modules --exclude=.git .
+        # 創建臨時部署目錄
+        mkdir deploy_temp
+        
+        # 複製需要的文件到臨時目錄
+        cp -r !(node_modules|.git|deploy_temp) deploy_temp/
+        
+        # 進入臨時目錄打包
+        cd deploy_temp
+        tar -czf ../deploy.tar.gz .
+        cd ..
         
         # 傳輸文件到 EC2
         scp deploy.tar.gz ubuntu@ec2-3-81-80-170.compute-1.amazonaws.com:~/discord-bot/
@@ -47,14 +55,12 @@ jobs:
         # SSH 到 EC2 執行部署命令
         ssh ubuntu@ec2-3-81-80-170.compute-1.amazonaws.com '
           cd ~/discord-bot &&
-          # 保留 node_modules 和環境配置文件
           find . -mindepth 1 ! -name "node_modules" ! -name ".env" ! -name "deploy.tar.gz" -delete &&
-          # 解壓新文件
           tar -xzf deploy.tar.gz &&
-          # 刪除部署包
           rm deploy.tar.gz &&
-          # 安裝依賴
           npm install &&
-          # 重啟或啟動服務
           pm2 restart discord-bot || pm2 start index.js --name "discord-bot"
         '
+        
+        # 清理臨時文件
+        rm -rf deploy_temp deploy.tar.gz
