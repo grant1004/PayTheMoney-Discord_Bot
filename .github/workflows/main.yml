@@ -35,12 +35,26 @@ jobs:
         key: ${{ secrets.SSH_PRIVATE_KEY }}
         known_hosts: ${{ secrets.SSH_KNOWN_HOSTS }}
     
-    # 部署到 EC2
+    # 將檔案傳輸到 EC2 並重啟服務
     - name: Deploy to EC2
       run: |
-        ssh ubuntu@${{ secrets.EC2_HOST }}
-        cd /path/to/your/app && # 替換成你的應用目錄
-        git pull origin main &&
-        npm install &&
-        pm2 restart your-app-name # 替換成你的 PM2 應用名稱
+        # 打包專案檔案（排除 node_modules）
+        tar -czf deploy.tar.gz --exclude=node_modules --exclude=.git .
+        
+        # 傳輸文件到 EC2
+        scp deploy.tar.gz ubuntu@ec2-3-81-80-170.compute-1.amazonaws.com:~/discord-bot/
+        
+        # SSH 到 EC2 執行部署命令
+        ssh ubuntu@ec2-3-81-80-170.compute-1.amazonaws.com '
+          cd ~/discord-bot &&
+          # 保留 node_modules 和環境配置文件
+          find . -mindepth 1 ! -name "node_modules" ! -name ".env" ! -name "deploy.tar.gz" -delete &&
+          # 解壓新文件
+          tar -xzf deploy.tar.gz &&
+          # 刪除部署包
+          rm deploy.tar.gz &&
+          # 安裝依賴
+          npm install &&
+          # 重啟或啟動服務
+          pm2 restart discord-bot || pm2 start index.js --name "discord-bot"
         '
