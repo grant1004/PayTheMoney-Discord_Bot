@@ -37,49 +37,26 @@ jobs:
     
     - name: Deploy to EC2
       run: |
-        # 步驟 1: 準備部署文件
-        mkdir deploy_temp
-        rsync -av \
-          --exclude='node_modules' \
-          --exclude='.git' \
-          --exclude='deploy_temp' \
-          --exclude='deploy.tar.gz' \
-          . deploy_temp/
+        # 設置 SSH 連接保持活躍
+        mkdir -p ~/.ssh
+        echo "ServerAliveInterval 50" >> ~/.ssh/config
         
-        # 步驟 2: 打包文件
-        cd deploy_temp
-        tar -czf ../deploy.tar.gz .
-        cd ..
-        
-        # 步驟 3: 傳輸到 EC2
-        scp deploy.tar.gz ubuntu@ec2-3-81-80-170.compute-1.amazonaws.com:~/discord-bot/
-        
-        # 步驟 4: 在 EC2 上設置和部署
-        ssh ubuntu@ec2-3-81-80-170.compute-1.amazonaws.com '
-          # 確保目錄存在並進入
-          mkdir -p ~/discord-bot
-          cd ~/discord-bot
+        # 在 EC2 上部署
+        ssh -o ServerAliveInterval=50 ubuntu@ec2-3-81-80-170.compute-1.amazonaws.com '
+          cd ~/discord-bot &&
           
-          # 備份 .env
-          cp .env .env.backup 2>/dev/null || true
+          # 儲存當前的修改（如果有的話）
+          git stash &&
           
-          # 解壓新文件
-          tar -xzf deploy.tar.gz
+          # 拉取最新代碼
+          git pull origin main &&
           
-          # 恢復 .env
-          mv .env.backup .env 2>/dev/null || true
+          # 還原儲存的本地修改
+          git stash pop || true &&
           
-          # 安裝依賴
-          npm install
+          # 安裝新的依賴（如果 package.json 有變化）
+          npm install &&
           
-          # 清理部署文件
-          rm deploy.tar.gz
-          
-          # 啟動服務
-          pm2 delete discord-bot 2>/dev/null || true
-          pm2 start index.js --name "discord-bot"
-          pm2 save
+          # 重啟服務
+          pm2 restart discord-bot || pm2 start index.js --name "discord-bot"
         '
-        
-        # 清理本地臨時文件
-        rm -rf deploy_temp deploy.tar.gz
