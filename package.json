@@ -16,5 +16,8 @@
   "scripts": {
     "test": "jest",
     "start": "node index.js"
+  },
+  "devDependencies": {
+    "jest": "^29.0.0"
   }
 }
