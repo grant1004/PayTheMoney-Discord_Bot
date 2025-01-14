@@ -1,0 +1,46 @@
+name: Discord Bot CI/CD
+
+on:
+  push:
+    branches: [ "main" ]
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+
+    strategy:
+      matrix:
+        node-version: [18.x]
+
+    steps:
+    - uses: actions/checkout@v4
+    - name: Use Node.js ${{ matrix.node-version }}
+      uses: actions/setup-node@v4
+      with:
+        node-version: ${{ matrix.node-version }}
+        cache: 'npm'
+    
+    # 安裝依賴
+    - name: Install dependencies
+      run: npm ci
+    
+    # 運行測試
+    - name: Run tests
+      run: npm test
+    
+    # 設置 SSH 密鑰
+    - name: Install SSH key
+      uses: shimataro/ssh-key-action@v2
+      with:
+        key: ${{ secrets.SSH_PRIVATE_KEY }}
+        known_hosts: ${{ secrets.SSH_KNOWN_HOSTS }}
+    
+    # 部署到 EC2
+    - name: Deploy to EC2
+      run: |
+        ssh ubuntu@${{ secrets.EC2_HOST }}
+        cd /path/to/your/app && # 替換成你的應用目錄
+        git pull origin main &&
+        npm install &&
+        pm2 restart your-app-name # 替換成你的 PM2 應用名稱
+        '
