@@ -37,7 +37,7 @@ client.on('interactionCreate', async interaction => {
         // 債權人姓名輸入
         const creditorInput = new TextInputBuilder()
             .setCustomId('creditorName')
-            .setLabel('該收錢的人名')
+            .setLabel('該收錢的人')
             .setStyle(TextInputStyle.Short)
             .setRequired(true);
 
