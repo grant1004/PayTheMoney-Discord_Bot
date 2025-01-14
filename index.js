@@ -30,7 +30,7 @@ client.on('interactionCreate', async interaction => {
         // 債務人姓名輸入
         const debtorInput = new TextInputBuilder()
             .setCustomId('debtorName')
-            .setLabel('該付錢的人名')
+            .setLabel('借錢的腦殘')
             .setStyle(TextInputStyle.Short)
             .setRequired(true);
 
