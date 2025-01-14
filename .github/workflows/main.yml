@@ -35,13 +35,10 @@ jobs:
         key: ${{ secrets.SSH_PRIVATE_KEY }}
         known_hosts: ${{ secrets.SSH_KNOWN_HOSTS }}
     
-    # 修改部署步驟
     - name: Deploy to EC2
       run: |
-        # 創建臨時部署目錄
+        # 步驟 1: 準備部署文件
         mkdir deploy_temp
-        
-        # 使用更簡單的方式複製文件
         rsync -av \
           --exclude='node_modules' \
           --exclude='.git' \
@@ -49,23 +46,40 @@ jobs:
           --exclude='deploy.tar.gz' \
           . deploy_temp/
         
-        # 進入臨時目錄打包
+        # 步驟 2: 打包文件
         cd deploy_temp
         tar -czf ../deploy.tar.gz .
         cd ..
         
-        # 傳輸文件到 EC2
+        # 步驟 3: 傳輸到 EC2
         scp deploy.tar.gz ubuntu@ec2-3-81-80-170.compute-1.amazonaws.com:~/discord-bot/
         
-        # SSH 到 EC2 執行部署命令
+        # 步驟 4: 在 EC2 上設置和部署
         ssh ubuntu@ec2-3-81-80-170.compute-1.amazonaws.com '
-          cd ~/discord-bot &&
-          find . -mindepth 1 ! -name "node_modules" ! -name ".env" ! -name "deploy.tar.gz" -delete &&
-          tar -xzf deploy.tar.gz &&
-          rm deploy.tar.gz &&
-          npm install &&
-          pm2 restart discord-bot || pm2 start index.js --name "discord-bot"
+          # 確保目錄存在並進入
+          mkdir -p ~/discord-bot
+          cd ~/discord-bot
+          
+          # 備份 .env
+          cp .env .env.backup 2>/dev/null || true
+          
+          # 解壓新文件
+          tar -xzf deploy.tar.gz
+          
+          # 恢復 .env
+          mv .env.backup .env 2>/dev/null || true
+          
+          # 安裝依賴
+          npm install
+          
+          # 清理部署文件
+          rm deploy.tar.gz
+          
+          # 啟動服務
+          pm2 delete discord-bot 2>/dev/null || true
+          pm2 start index.js --name "discord-bot"
+          pm2 save
         '
         
-        # 清理臨時文件
+        # 清理本地臨時文件
         rm -rf deploy_temp deploy.tar.gz
