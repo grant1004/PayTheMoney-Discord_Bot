@@ -30,11 +30,6 @@ const client = new Client({
     ]
 });
 
-client.once('ready', () => {
-    console.log('Bot is ready!');
-    console.log(`Logged in as ${client.user.tag}`);
-});
-
 // 監聽斜線命令
 client.on('interactionCreate', async interaction => {
     if (!interaction.isCommand()) return;
@@ -80,7 +75,8 @@ client.on('interactionCreate', async interaction => {
         );
 
         await interaction.showModal(modal);
-    } else if (interaction.commandName === 'checkdebt') {
+    } 
+    else if (interaction.commandName === 'checkdebt') {
         const targetUser = interaction.options.getString('user');
         
         // 查詢該使用者的債務記錄
@@ -228,6 +224,10 @@ client.on('interactionCreate', async interaction => {
 // 註冊斜線命令
 client.once('ready', async () => {
     try {
+        console.log('===== Bot 啟動中 =====');
+        console.log(`登入身份: ${client.user.tag}`);
+        
+        // 註冊斜線命令
         const commands = [
             {
                 name: 'adddebt',
@@ -240,17 +240,22 @@ client.once('ready', async () => {
                     {
                         name: 'user',
                         description: '要查詢的使用者名稱',
-                        type: 3, // STRING type
+                        type: 3,
                         required: true
                     }
                 ]
             }
         ];
+
+        console.log('正在註冊斜線命令...');
+        console.log('準備註冊的命令:', commands.map(cmd => cmd.name).join(', '));
         
-        await client.application.commands.set(commands);
-        console.log('斜線命令註冊成功');
+        const registeredCommands = await client.application.commands.set(commands);
+        console.log('已註冊的命令:', registeredCommands.map(cmd => cmd.name).join(', '));
+        
+        console.log('===== Bot 啟動完成 =====');
     } catch (error) {
-        console.error('註冊斜線命令錯誤:', error);
+        console.error('Bot 啟動過程發生錯誤:', error);
     }
 });
 
