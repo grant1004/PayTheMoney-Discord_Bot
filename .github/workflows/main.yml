@@ -43,7 +43,7 @@ jobs:
         echo "ServerAliveInterval 50" >> ~/.ssh/config
         
         # 在 EC2 上部署
-        ssh -o ServerAliveInterval=50 ubuntu@ec2-3-81-80-170.compute-1.amazonaws.com '
+        ssh -o ServerAliveInterval=50 ubuntu@ec2-52-91-43-239.compute-1.amazonaws.com '
           cd ~/discord-bot &&
           
           # 儲存當前的修改（如果有的話）
