@@ -129,8 +129,12 @@ client.on('interactionCreate', async interaction => {
         await interaction.showModal(modal);
     } // adddebt 
     else if (interaction.commandName === 'checkdebt') {
-        const targetUser = interaction.options.getString('user');
+        const userInput = interaction.options.getString('user');
+        console.log("原始 autocomplete 輸入:", userInput);
         
+        // 因為是 autocomplete，所以一定會是 "userId|displayName" 格式
+        const [userId, targetUser] = userInput.split('|');
+        console.log("解析後的資料:", { userId, targetUser });
         // 查詢該使用者的債務記錄
         db.all(
             `SELECT * FROM debts WHERE debtor_name = ? OR creditor_name = ?`,
