@@ -1,110 +1,105 @@
-// test/basic.test.js
-const { Client, GatewayIntentBits } = require('discord.js');
+// test/database.test.js
+const sqlite3 = require('sqlite3').verbose();
+const { Client } = require('discord.js');
 
-// Mock Discord.js 類
-jest.mock('discord.js', () => {
-  return {
-    Client: jest.fn().mockImplementation(() => ({
-      login: jest.fn(),
-      on: jest.fn(),
-      once: jest.fn(),
-      application: {
-        commands: {
-          set: jest.fn()
-        }
-      },
-      // 直接在 mock 對象中添加事件處理方法
-      handleInteraction: async function(interaction) {
-        if (interaction.isCommand() && interaction.commandName === 'adddebt') {
-          await interaction.showModal();
-        }
-        if (interaction.isModalSubmit() && interaction.customId === 'debtModal') {
-          await interaction.reply();
-        }
+// Mock Discord.js
+jest.mock('discord.js');
+
+// 建立測試用的資料庫連接
+const db = new sqlite3.Database(':memory:'); // 使用記憶體資料庫進行測試
+
+describe('Database Operations', () => {
+  beforeAll((done) => {
+    // 在測試開始前建立資料表
+    db.run(`CREATE TABLE IF NOT EXISTS debts (
+      id TEXT PRIMARY KEY,
+      debtor_id TEXT NOT NULL,
+      debtor_name TEXT NOT NULL,
+      creditor_id TEXT NOT NULL,
+      creditor_name TEXT NOT NULL,
+      amount REAL NOT NULL,
+      purpose TEXT NOT NULL,
+      date TEXT NOT NULL,
+      confirmed BOOLEAN DEFAULT FALSE
+    )`, done);
+  });
+
+  beforeEach((done) => {
+    // 在每個測試前插入測試資料
+    db.run(`INSERT INTO debts (id, debtor_id, debtor_name, creditor_id, creditor_name, amount, purpose, date, confirmed) 
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      ['test123',
+       'user1',
+       'testUser1',
+       'user2',
+       'testUser2',
+       100,
+       '測試用途',
+       '2024-01-27',
+       false
+      ], done);
+  });
+
+  afterEach((done) => {
+    // 在每個測試後清空資料表
+    db.run('DELETE FROM debts', done);
+  });
+
+  afterAll((done) => {
+    // 測試結束後關閉資料庫連接
+    db.close(done);
+  });
+
+  test('should find debt record by debtor name', (done) => {
+    db.all(
+      `SELECT * FROM debts WHERE debtor_name = ?`,
+      ['testUser1'],
+      (err, rows) => {
+        expect(err).toBeNull();
+        expect(rows.length).toBe(1);
+        expect(rows[0].debtor_name).toBe('testUser1');
+        expect(rows[0].amount).toBe(100);
+        done();
       }
-    })),
-    GatewayIntentBits: {
-      Guilds: 1,
-      GuildMessages: 2,
-      MessageContent: 3,
-      GuildMembers: 4
-    },
-    ButtonBuilder: jest.fn(),
-    ActionRowBuilder: jest.fn().mockImplementation(() => ({
-      addComponents: jest.fn().mockReturnThis()
-    })),
-    ButtonStyle: {
-      Success: 1
-    },
-    ModalBuilder: jest.fn().mockImplementation(() => ({
-      setCustomId: jest.fn().mockReturnThis(),
-      setTitle: jest.fn().mockReturnThis(),
-      addComponents: jest.fn().mockReturnThis()
-    })),
-    TextInputBuilder: jest.fn().mockImplementation(() => ({
-      setCustomId: jest.fn().mockReturnThis(),
-      setLabel: jest.fn().mockReturnThis(),
-      setStyle: jest.fn().mockReturnThis(),
-      setRequired: jest.fn().mockReturnThis()
-    })),
-    TextInputStyle: {
-      Short: 1,
-      Paragraph: 2
-    }
-  };
-});
-
-describe('Discord Bot', () => {
-  let client;
-  const { GatewayIntentBits } = require('discord.js');
-
-  beforeEach(() => {
-    client = new Client({
-      intents: [
-        GatewayIntentBits.Guilds,
-        GatewayIntentBits.GuildMessages,
-        GatewayIntentBits.MessageContent,
-        GatewayIntentBits.GuildMembers,
-      ]
-    });
+    );
   });
 
-  test('bot should initialize correctly', () => {
-    expect(client).toBeDefined();
+  test('should find debt record by creditor name', (done) => {
+    db.all(
+      `SELECT * FROM debts WHERE creditor_name = ?`,
+      ['testUser2'],
+      (err, rows) => {
+        expect(err).toBeNull();
+        expect(rows.length).toBe(1);
+        expect(rows[0].creditor_name).toBe('testUser2');
+        expect(rows[0].amount).toBe(100);
+        done();
+      }
+    );
   });
 
-  test('adddebt command should create modal', async () => {
-    const interaction = {
-      isCommand: () => true,
-      commandName: 'adddebt',
-      showModal: jest.fn().mockResolvedValue(true),
-      isModalSubmit: () => false
-    };
-
-    await client.handleInteraction(interaction);
-    expect(interaction.showModal).toHaveBeenCalled();
+  test('should find no records for non-existent user', (done) => {
+    db.all(
+      `SELECT * FROM debts WHERE debtor_name = ? OR creditor_name = ?`,
+      ['nonexistentUser', 'nonexistentUser'],
+      (err, rows) => {
+        expect(err).toBeNull();
+        expect(rows.length).toBe(0);
+        done();
+      }
+    );
   });
 
-  test('modal submit should create debt record', async () => {
-    const modalInteraction = {
-      isCommand: () => false,
-      isModalSubmit: () => true,
-      customId: 'debtModal',
-      fields: {
-        getTextInputValue: jest.fn().mockImplementation((field) => {
-          const values = {
-            debtorName: '測試債務人',
-            creditorName: '測試債權人',
-            amount: '100',
-            purpose: '測試用途'
-          };
-          return values[field];
-        })
-      },
-      reply: jest.fn().mockResolvedValue(true)
-    };
-
-    await client.handleInteraction(modalInteraction);
-    expect(modalInteraction.reply).toHaveBeenCalled();
+  test('should find records by both debtor and creditor name', (done) => {
+    db.all(
+      `SELECT * FROM debts WHERE debtor_name = ? OR creditor_name = ?`,
+      ['testUser1', 'testUser1'],
+      (err, rows) => {
+        expect(err).toBeNull();
+        expect(rows.length).toBe(1);
+        expect(rows[0].debtor_name).toBe('testUser1');
+        done();
+      }
+    );
   });
 });
