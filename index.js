@@ -133,7 +133,7 @@ client.on('interactionCreate', async interaction => {
         
         // 查詢該使用者的債務記錄
         db.all(
-            `SELECT * FROM debts WHERE debtor_id = ? OR creditor_id = ?`,
+            `SELECT * FROM debts WHERE debtor_name = ? OR creditor_name = ?`,
             [targetUser, targetUser],
             async (err, rows) => {
                 if (err) {
