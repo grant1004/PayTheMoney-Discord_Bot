@@ -155,12 +155,23 @@ client.on('interactionCreate', async interaction => {
                     });
                 }
 
-                const records = rows.map(row => 
-                    `日期：${row.date}\n<@${row.debtor_id}> 欠 <@${row.creditor_id}> ${row.amount} 元\n用途：${row.purpose}\n狀態：${row.confirmed ? '已收到' : '未收到'}\n-------------------`
-                ).join('\n');
+                
+                const records = rows
+                    .filter(row => !row.confirmed)  // 先過濾出 confirmed 為 false 的記錄
+                    .map(row => 
+                        `日期：${row.date}\n<@${row.debtor_id}> 欠 <@${row.creditor_id}> ${row.amount} 元\n用途：${row.purpose}\n狀態：未收到\n-------------------`
+                    ).join('\n');
+
+                // 如果想顯示沒有未收到的記錄的訊息
+                if (records.length === 0) {
+                    return interaction.reply({
+                        content: '沒有未收到的欠款記錄。',
+                        ephemeral: true
+                    });
+                }
 
                 await interaction.reply({
-                    content: `查詢結果：\n${records}`,
+                    content: `未收到的欠款記錄：\n${records}`,
                     ephemeral: true
                 });
             }
