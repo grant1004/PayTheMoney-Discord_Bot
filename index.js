@@ -8,16 +8,37 @@ const db = new sqlite3.Database('debts.db', (err) => {
         console.error('資料庫連接錯誤:', err);
     } else {
         console.log('成功連接到 SQLite 資料庫');
-        // 創建債務記錄表
-        db.run(`CREATE TABLE IF NOT EXISTS debts (
-            id TEXT PRIMARY KEY,
-            debtor TEXT NOT NULL,
-            creditor TEXT NOT NULL,
-            amount REAL NOT NULL,
-            purpose TEXT NOT NULL,
-            date TEXT NOT NULL,
-            confirmed BOOLEAN DEFAULT FALSE
-        )`);
+        
+        // 檢查表是否存在
+        db.get(`SELECT name FROM sqlite_master WHERE type='table' AND name='debts'`, (err, row) => {
+            if (err) {
+                console.error('檢查表時發生錯誤:', err);
+                return;
+            }
+            
+            // 如果表不存在，則建立
+            if (!row) {
+                db.run(`CREATE TABLE debts (
+                    id TEXT PRIMARY KEY,
+                    debtor_id TEXT NOT NULL,
+                    debtor_name TEXT NOT NULL,
+                    creditor_id TEXT NOT NULL,
+                    creditor_name TEXT NOT NULL,
+                    amount REAL NOT NULL,
+                    purpose TEXT NOT NULL,
+                    date TEXT NOT NULL,
+                    confirmed BOOLEAN DEFAULT FALSE
+                )`, (err) => {
+                    if (err) {
+                        console.error('創建表時發生錯誤:', err);
+                    } else {
+                        console.log('成功建立資料表');
+                    }
+                });
+            } else {
+                console.log('資料表已存在，無需建立');
+            }
+        });
     }
 });
 
@@ -27,7 +48,42 @@ const client = new Client({
         GatewayIntentBits.GuildMessages,
         GatewayIntentBits.MessageContent,
         GatewayIntentBits.GuildMembers,
+        GatewayIntentBits.GuildPresences
     ]
+});
+
+// 暫存用戶選擇的資料
+let debtData = new Map();
+
+// 處理 Autocomplete 互動
+client.on('interactionCreate', async interaction => {
+    if (!interaction.isAutocomplete()) return;
+
+    const focusedOption = interaction.options.getFocused(true);
+    let choices = [];
+
+    if (focusedOption.name === 'debtor' || focusedOption.name === 'creditor' || focusedOption.name === 'user') {
+        const searchTerm = focusedOption.value.toLowerCase();
+        const members = await interaction.guild.members.fetch();
+        
+        choices = Array.from(members.values())
+            .filter(member => 
+                member.user.username.toLowerCase().includes(searchTerm) ||
+                (member.nickname && member.nickname.toLowerCase().includes(searchTerm))
+            )
+            .slice(0, 25)
+            .map(member => {
+                const displayName = member.nickname || member.user.username;
+                const username = member.user.username;
+                return {
+                    name: member.nickname ? `${displayName} (${username})` : displayName,
+                    value: `${member.user.id}|${displayName}` // 儲存 ID 和顯示名稱
+                };
+            });
+            
+    }
+
+    await interaction.respond(choices);
 });
 
 // 監聽斜線命令
@@ -35,23 +91,21 @@ client.on('interactionCreate', async interaction => {
     if (!interaction.isCommand()) return;
 
     if (interaction.commandName === 'adddebt') {
+        const [debtorId, debtorName] = interaction.options.getString('debtor').split('|');
+        const [creditorId, creditorName] = interaction.options.getString('creditor').split('|');
+
+        // 儲存用戶選擇
+        debtData.set(interaction.user.id, {
+            debtor_id: debtorId,
+            debtor_name: debtorName,
+            creditor_id: creditorId,
+            creditor_name: creditorName
+        }); // 儲存用戶選擇
+
+        // 顯示金額和用途的 Modal
         const modal = new ModalBuilder()
-            .setCustomId('debtModal')
-            .setTitle('新增欠款記錄');
-
-        const debtorInput = new TextInputBuilder()
-            .setCustomId('debtorName')
-            .setLabel('借錢的人')
-            .setStyle(TextInputStyle.Short)
-            .setPlaceholder('請輸入借款人名稱')
-            .setRequired(true);
-
-        const creditorInput = new TextInputBuilder()
-            .setCustomId('creditorName')
-            .setLabel('該收錢的人')
-            .setStyle(TextInputStyle.Short)
-            .setPlaceholder('請輸入貸款人名稱')
-            .setRequired(true);
+            .setCustomId('amount_purpose_modal')
+            .setTitle('輸入金額和用途');
 
         const amountInput = new TextInputBuilder()
             .setCustomId('amount')
@@ -68,20 +122,18 @@ client.on('interactionCreate', async interaction => {
             .setRequired(true);
 
         modal.addComponents(
-            new ActionRowBuilder().addComponents(debtorInput),
-            new ActionRowBuilder().addComponents(creditorInput),
             new ActionRowBuilder().addComponents(amountInput),
             new ActionRowBuilder().addComponents(purposeInput)
         );
 
         await interaction.showModal(modal);
-    } 
+    } // adddebt 
     else if (interaction.commandName === 'checkdebt') {
         const targetUser = interaction.options.getString('user');
         
         // 查詢該使用者的債務記錄
         db.all(
-            `SELECT * FROM debts WHERE debtor = ? OR creditor = ?`,
+            `SELECT * FROM debts WHERE debtor_id = ? OR creditor_id = ?`,
             [targetUser, targetUser],
             async (err, rows) => {
                 if (err) {
@@ -100,7 +152,7 @@ client.on('interactionCreate', async interaction => {
                 }
 
                 const records = rows.map(row => 
-                    `日期：${row.date}\n${row.debtor} 欠 ${row.creditor} ${row.amount} 元\n用途：${row.purpose}\n狀態：${row.confirmed ? '已收到' : '未收到'}\n-------------------`
+                    `日期：${row.date}\n<@${row.debtor_id}> 欠 <@${row.creditor_id}> ${row.amount} 元\n用途：${row.purpose}\n狀態：${row.confirmed ? '已收到' : '未收到'}\n-------------------`
                 ).join('\n');
 
                 await interaction.reply({
@@ -109,17 +161,25 @@ client.on('interactionCreate', async interaction => {
                 });
             }
         );
-    }
-});
+    } // checkdebt 
+
+}); // 
+// 監聽斜線命令
 
 // 處理模態框提交
 client.on('interactionCreate', async interaction => {
     if (!interaction.isModalSubmit()) return;
 
-    if (interaction.customId === 'debtModal') {
+    if (interaction.customId === 'amount_purpose_modal') {
         try {
-            const debtor = interaction.fields.getTextInputValue('debtorName');
-            const creditor = interaction.fields.getTextInputValue('creditorName');
+            const data = debtData.get(interaction.user.id);
+            if (!data) {
+                return interaction.reply({
+                    content: '發生錯誤，請重新開始。',
+                    ephemeral: true
+                });
+            }
+
             const amount = interaction.fields.getTextInputValue('amount');
             const purpose = interaction.fields.getTextInputValue('purpose');
             const date = new Date().toLocaleDateString();
@@ -135,8 +195,18 @@ client.on('interactionCreate', async interaction => {
 
             // 存入資料庫
             db.run(
-                `INSERT INTO debts (id, debtor, creditor, amount, purpose, date) VALUES (?, ?, ?, ?, ?, ?)`,
-                [recordId, debtor, creditor, parseFloat(amount), purpose, date],
+                `INSERT INTO debts (id, debtor_id, debtor_name, creditor_id, creditor_name, amount, purpose, date) 
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+                [
+                    recordId,
+                    data.debtor_id,
+                    data.debtor_name,
+                    data.creditor_id,
+                    data.creditor_name,
+                    parseFloat(amount),
+                    purpose,
+                    date
+                ],
                 async (err) => {
                     if (err) {
                         console.error('插入記錄錯誤:', err);
@@ -155,9 +225,12 @@ client.on('interactionCreate', async interaction => {
                         .addComponents(confirmButton);
 
                     await interaction.reply({
-                        content: `${date}\n${debtor} 今天欠 ${creditor} ${amount} 元\n用途：${purpose}\n狀態：未收到`,
+                        content: `${date}\n<@${data.debtor_id}> 今天欠 <@${data.creditor_id}> ${amount} 元\n用途：${purpose}\n狀態：未收到`,
                         components: [row]
                     });
+
+                    // 清除暫存資料
+                    debtData.delete(interaction.user.id);
                 }
             );
         } catch (error) {
@@ -178,48 +251,72 @@ client.on('interactionCreate', async interaction => {
         try {
             const recordId = interaction.customId.split('_')[1];
             
-            // 更新資料庫中的確認狀態
-            db.run(
-                `UPDATE debts SET confirmed = TRUE WHERE id = ?`,
+            // 先檢查記錄存在且使用者是否為債權人
+            db.get(
+                `SELECT * FROM debts WHERE id = ?`,
                 [recordId],
-                async (err) => {
-                    if (err) {
-                        console.error('更新記錄錯誤:', err);
+                async (err, record) => {
+                    if (err || !record) {
                         return interaction.reply({
-                            content: '更新狀態時發生錯誤，請稍後再試。',
-                            ephemeral: true
+                            content: '找不到該筆記錄。',
+                            flags: ['Ephemeral']
                         });
                     }
 
-                    // 查詢更新後的記錄
-                    db.get(
-                        `SELECT * FROM debts WHERE id = ?`,
+                    // 檢查點擊按鈕的人是否為債權人
+                    if (interaction.user.id !== record.creditor_id) {
+                        return interaction.reply({
+                            content: '只有債權人可以確認收款。',
+                            flags: ['Ephemeral']
+                        });
+                    }
+
+                    // 如果是債權人，才更新資料庫狀態
+                    db.run(
+                        `UPDATE debts SET confirmed = TRUE WHERE id = ?`,
                         [recordId],
-                        async (err, record) => {
-                            if (err || !record) {
+                        async (err) => {
+                            if (err) {
+                                console.error('更新記錄錯誤:', err);
                                 return interaction.reply({
-                                    content: '查詢記錄時發生錯誤，請稍後再試。',
+                                    content: '更新狀態時發生錯誤，請稍後再試。',
                                     ephemeral: true
                                 });
                             }
 
-                            await interaction.update({
-                                content: `${record.date}\n${record.debtor} 今天欠 ${record.creditor} ${record.amount} 元\n用途：${record.purpose}\n狀態：已收到`,
-                                components: []
-                            });
+                            // 查詢更新後的記錄
+                            db.get(
+                                `SELECT * FROM debts WHERE id = ?`,
+                                [recordId],
+                                async (err, record) => {
+                                    if (err || !record) {
+                                        return interaction.reply({
+                                            content: '查詢記錄時發生錯誤，請稍後再試。',
+                                            ephemeral: true
+                                        });
+                                    }
+
+                                    await interaction.update({
+                                        content: `${record.date}\n<@${record.debtor_id}> 今天欠 <@${record.creditor_id}> ${record.amount} 元\n用途：${record.purpose}\n狀態：已收到`,
+                                        components: []
+                                    });
+                                }
+                            );
                         }
                     );
-                }
+                } 
             );
-        } catch (error) {
+                
+        } // try 
+        catch (error) {
             console.error('處理按鈕點擊錯誤:', error);
             await interaction.reply({
                 content: '處理確認時發生錯誤，請稍後再試。',
                 ephemeral: true
             });
-        }
-    }
-});
+        } // catch
+    } // if 
+}); // client 
 
 // 註冊斜線命令
 client.once('ready', async () => {
@@ -231,7 +328,23 @@ client.once('ready', async () => {
         const commands = [
             {
                 name: 'adddebt',
-                description: '新增一筆欠款記錄'
+                description: '新增一筆欠款記錄',
+                options: [
+                    {
+                        name: 'debtor',
+                        description: '借款人',
+                        type: 3, // STRING
+                        required: true,
+                        autocomplete: true
+                    },
+                    {
+                        name: 'creditor',
+                        description: '貸款人',
+                        type: 3, // STRING
+                        required: true,
+                        autocomplete: true
+                    }
+                ]
             },
             {
                 name: 'checkdebt',
@@ -241,7 +354,8 @@ client.once('ready', async () => {
                         name: 'user',
                         description: '要查詢的使用者名稱',
                         type: 3,
-                        required: true
+                        required: true,
+                        autocomplete: true
                     }
                 ]
             }
