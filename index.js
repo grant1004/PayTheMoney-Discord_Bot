@@ -298,71 +298,66 @@ client.on('interactionCreate', async interaction => {
             const rainAdvice = getRainAdvice(daily.precipitation_probability_max[0]);
             
             const weatherEmbed = new EmbedBuilder()
-                .setTitle(`🌤️ ${cityData.name}今日天氣`)
-                .setDescription(`${getWeatherDescription(current.weather_code)}\n\n💡 **今日建議**\n${rainAdvice}`)
-                .setColor(getWeatherColor(current.weather_code))
-                .setTimestamp(new Date(current.time))
-                .addFields(
-                    {
-                        name: '🌡️ 目前溫度',
-                        value: `${current.temperature_2m}°C`,
-                        inline: true
-                    },
-                    {
-                        name: '🌡️ 體感溫度',
-                        value: `${current.apparent_temperature}°C`,
-                        inline: true
-                    },
-                    {
-                        name: '💧 濕度',
-                        value: `${current.relative_humidity_2m}%`,
-                        inline: true
-                    },
-                    {
-                        name: '🌡️ 今日最高溫',
-                        value: `${daily.temperature_2m_max[0]}°C`,
-                        inline: true
-                    },
-                    {
-                        name: '🌡️ 今日最低溫',
-                        value: `${daily.temperature_2m_min[0]}°C`,
-                        inline: true
-                    },
-                    {
-                        name: '🌧️ 降雨量',
-                        value: `${current.precipitation || 0} mm`,
-                        inline: true
-                    },
-                    {
-                        name: '☔ 降雨機率',
-                        value: `最高: ${daily.precipitation_probability_max[0]}%\n平均: ${daily.precipitation_probability_mean[0]}%`,
-                        inline: true
-                    },
-                    {
-                        name: '💨 風速',
-                        value: `${current.wind_speed_10m} km/h`,
-                        inline: true
-                    },
-                    {
-                        name: '🧭 風向',
-                        value: `${getWindDirection(current.wind_direction_10m)} (${current.wind_direction_10m}°)`,
-                        inline: true
-                    },
-                    {
-                        name: '🌅 時段',
-                        value: current.is_day ? '白天' : '夜晚',
-                        inline: true
-                    },
-                    {
-                        name: '📊 今日預計總降雨',
-                        value: `${daily.precipitation_sum[0]} mm`,
-                        inline: true
-                    }
-                )
-                .setFooter({ 
-                    text: `資料來源：Open-Meteo.com | 降雨機率為全日預測 | 更新時間：${new Date().toLocaleTimeString('zh-TW')}`,
-                    iconURL: 'https://open-meteo.com/favicon.ico'
-                });
+            .setTitle(`🌤️ ${cityData.name}今日天氣`)
+            .setDescription(`${getWeatherDescription(current.weather_code)}\n\n💡 **今日建議**\n${rainAdvice}`)
+            .setColor(getWeatherColor(current.weather_code))
+            .setTimestamp(new Date(current.time))
+            .addFields(
+                // 第一行：目前溫度狀況                
+                {
+                    name: '☔ 降雨機率',
+                    value: `${daily.precipitation_probability_max[0]}%`,
+                    inline: true
+                },
+                {
+                    name: '🌡️ 目前溫度',
+                    value: `${current.temperature_2m}°C`,
+                    inline: true
+                },
+                {
+                    name: '🌡️ 體感溫度',
+                    value: `${current.apparent_temperature}°C`,
+                    inline: true
+                },
+                
+                // 第二行：今日溫度範圍與時段
+                {
+                    name: '🔥 今日最高溫',
+                    value: `${daily.temperature_2m_max[0]}°C`,
+                    inline: true
+                },
+                {
+                    name: '❄️ 今日最低溫',
+                    value: `${daily.temperature_2m_min[0]}°C`,
+                    inline: true
+                },                               
+                {
+                    name: '💧 濕度',
+                    value: `${current.relative_humidity_2m}%`,
+                    inline: true
+                },
+                
+                // 第三行：天氣狀況                
+                {
+                    name: '🌅 時段',
+                    value: current.is_day ? '☀️ 白天' : '🌙 夜晚',
+                    inline: true
+                }, 
+                {
+                    name: '💨 風速',
+                    value: `${current.wind_speed_10m} km/h`,
+                    inline: true
+                },
+                {
+                    name: '\u200B', // 空白欄位用於對齊
+                    value: '\u200B',
+                    inline: true
+                }
+            )
+            .setFooter({ 
+                text: `資料來源：Open-Meteo.com | 更新時間：${new Date().toLocaleTimeString('zh-TW')}`,
+                iconURL: 'https://open-meteo.com/favicon.ico'
+            });
 
             await interaction.editReply({ embeds: [weatherEmbed] });
 
