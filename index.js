@@ -1,5 +1,5 @@
 const { Client, GatewayIntentBits, ButtonBuilder, ActionRowBuilder, ButtonStyle, 
-    ModalBuilder, TextInputBuilder, TextInputStyle } = require('discord.js');
+    ModalBuilder, TextInputBuilder, TextInputStyle, EmbedBuilder } = require('discord.js');
 const { Pool } = require('pg');
 require('dotenv').config();
 
@@ -29,6 +29,67 @@ async function initDatabase() {
     } catch (err) {
         console.error('資料庫初始化錯誤:', err);
     }
+}
+
+// 獲取台北天氣資訊
+async function getTaipeiWeather() {
+    try {
+        // 台北的經緯度：25.033, 121.565
+        const response = await fetch('https://api.open-meteo.com/v1/forecast?latitude=25.033&longitude=121.565&current=temperature_2m,relative_humidity_2m,apparent_temperature,is_day,precipitation,rain,weather_code,wind_speed_10m,wind_direction_10m&hourly=temperature_2m,precipitation,weather_code&daily=weather_code,temperature_2m_max,temperature_2m_min,precipitation_sum&timezone=Asia%2FTaipei&forecast_days=1');
+        
+        if (!response.ok) {
+            throw new Error(`HTTP error! status: ${response.status}`);
+        }
+        
+        const data = await response.json();
+        return data;
+    } catch (error) {
+        console.error('獲取天氣資訊時發生錯誤:', error);
+        throw error;
+    }
+}
+
+// 天氣代碼對應描述（WMO Weather interpretation codes）
+function getWeatherDescription(code) {
+    const weatherCodes = {
+        0: '☀️ 晴朗',
+        1: '🌤️ 大致晴朗',
+        2: '⛅ 部分多雲',
+        3: '☁️ 陰天',
+        45: '🌫️ 霧',
+        48: '🌫️ 結霜霧',
+        51: '🌦️ 小毛毛雨',
+        53: '🌦️ 中等毛毛雨',
+        55: '🌦️ 密集毛毛雨',
+        56: '🌦️ 輕微凍毛毛雨',
+        57: '🌦️ 密集凍毛毛雨',
+        61: '🌧️ 小雨',
+        63: '🌧️ 中雨',
+        65: '🌧️ 大雨',
+        66: '🌧️ 輕微凍雨',
+        67: '🌧️ 嚴重凍雨',
+        71: '🌨️ 小雪',
+        73: '🌨️ 中雪',
+        75: '🌨️ 大雪',
+        77: '🌨️ 雪粒',
+        80: '🌦️ 小陣雨',
+        81: '🌦️ 中等陣雨',
+        82: '🌦️ 強烈陣雨',
+        85: '🌨️ 小雪陣',
+        86: '🌨️ 大雪陣',
+        95: '⛈️ 雷暴',
+        96: '⛈️ 輕微冰雹雷暴',
+        99: '⛈️ 嚴重冰雹雷暴'
+    };
+    
+    return weatherCodes[code] || '🌤️ 未知天氣';
+}
+
+// 風向轉換
+function getWindDirection(degree) {
+    const directions = ['北', '東北', '東', '東南', '南', '西南', '西', '西北'];
+    const index = Math.round(degree / 45) % 8;
+    return directions[index];
 }
 
 const client = new Client({
@@ -156,6 +217,82 @@ client.on('interactionCreate', async interaction => {
             return interaction.reply({
                 content: '查詢記錄時發生錯誤，請稍後再試。',
                 ephemeral: true
+            });
+        }
+    }
+    else if (interaction.commandName === 'weather') {
+        // 延遲回應，因為 API 請求可能需要一些時間
+        await interaction.deferReply();
+
+        try {
+            const weatherData = await getTaipeiWeather();
+            const current = weatherData.current;
+            const daily = weatherData.daily;
+            
+            // 建立天氣資訊嵌入式訊息
+            const weatherEmbed = new EmbedBuilder()
+                .setTitle('🌤️ 台北市今日天氣')
+                .setDescription(getWeatherDescription(current.weather_code))
+                .setColor(0x0099FF)
+                .setTimestamp(new Date(current.time))
+                .addFields(
+                    {
+                        name: '🌡️ 目前溫度',
+                        value: `${current.temperature_2m}°C`,
+                        inline: true
+                    },
+                    {
+                        name: '🌡️ 體感溫度',
+                        value: `${current.apparent_temperature}°C`,
+                        inline: true
+                    },
+                    {
+                        name: '💧 濕度',
+                        value: `${current.relative_humidity_2m}%`,
+                        inline: true
+                    },
+                    {
+                        name: '🌡️ 今日最高溫',
+                        value: `${daily.temperature_2m_max[0]}°C`,
+                        inline: true
+                    },
+                    {
+                        name: '🌡️ 今日最低溫',
+                        value: `${daily.temperature_2m_min[0]}°C`,
+                        inline: true
+                    },
+                    {
+                        name: '🌧️ 降雨量',
+                        value: `${current.precipitation || 0} mm`,
+                        inline: true
+                    },
+                    {
+                        name: '💨 風速',
+                        value: `${current.wind_speed_10m} km/h`,
+                        inline: true
+                    },
+                    {
+                        name: '🧭 風向',
+                        value: `${getWindDirection(current.wind_direction_10m)} (${current.wind_direction_10m}°)`,
+                        inline: true
+                    },
+                    {
+                        name: '🌅 時段',
+                        value: current.is_day ? '白天' : '夜晚',
+                        inline: true
+                    }
+                )
+                .setFooter({ 
+                    text: '資料來源：Open-Meteo.com',
+                    iconURL: 'https://open-meteo.com/favicon.ico'
+                });
+
+            await interaction.editReply({ embeds: [weatherEmbed] });
+
+        } catch (error) {
+            console.error('獲取天氣資訊錯誤:', error);
+            await interaction.editReply({
+                content: '抱歉，無法獲取天氣資訊，請稍後再試。',
             });
         }
     }
@@ -324,6 +461,10 @@ client.once('ready', async () => {
                         autocomplete: true
                     }
                 ]
+            },
+            {
+                name: 'weather',
+                description: '查看台北市今日天氣資訊'
             }
         ];
 
