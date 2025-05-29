@@ -9,6 +9,32 @@ const pool = new Pool({
     ssl: process.env.NODE_ENV === 'production' ? { rejectUnauthorized: false } : false
 });
 
+// 台灣縣市經緯度資料
+const taiwanCities = {
+    '台北市': { lat: 25.033, lon: 121.565, name: '台北市' },
+    '新北市': { lat: 25.012, lon: 121.465, name: '新北市' },
+    '桃園市': { lat: 24.993, lon: 121.301, name: '桃園市' },
+    '台中市': { lat: 24.163, lon: 120.647, name: '台中市' },
+    '台南市': { lat: 22.999, lon: 120.227, name: '台南市' },
+    '高雄市': { lat: 22.627, lon: 120.302, name: '高雄市' },
+    '新竹市': { lat: 24.806, lon: 120.968, name: '新竹市' },
+    '新竹縣': { lat: 24.832, lon: 121.018, name: '新竹縣' },
+    '苗栗縣': { lat: 24.560, lon: 120.821, name: '苗栗縣' },
+    '彰化縣': { lat: 24.052, lon: 120.516, name: '彰化縣' },
+    '南投縣': { lat: 23.961, lon: 120.972, name: '南投縣' },
+    '雲林縣': { lat: 23.709, lon: 120.431, name: '雲林縣' },
+    '嘉義市': { lat: 23.480, lon: 120.449, name: '嘉義市' },
+    '嘉義縣': { lat: 23.452, lon: 120.258, name: '嘉義縣' },
+    '屏東縣': { lat: 22.673, lon: 120.549, name: '屏東縣' },
+    '宜蘭縣': { lat: 24.702, lon: 121.738, name: '宜蘭縣' },
+    '花蓮縣': { lat: 23.993, lon: 121.611, name: '花蓮縣' },
+    '台東縣': { lat: 22.755, lon: 121.144, name: '台東縣' },
+    '澎湖縣': { lat: 23.571, lon: 119.579, name: '澎湖縣' },
+    '金門縣': { lat: 24.449, lon: 118.377, name: '金門縣' },
+    '連江縣': { lat: 26.197, lon: 119.950, name: '連江縣' },
+    '基隆市': { lat: 25.128, lon: 121.739, name: '基隆市' }
+};
+
 // 初始化資料庫表
 async function initDatabase() {
     try {
@@ -31,11 +57,10 @@ async function initDatabase() {
     }
 }
 
-// 獲取台北天氣資訊
-async function getTaipeiWeather() {
+// 獲取台灣指定縣市天氣資訊
+async function getCityWeather(cityData) {
     try {
-        // 台北的經緯度：25.033, 121.565
-        const response = await fetch('https://api.open-meteo.com/v1/forecast?latitude=25.033&longitude=121.565&current=temperature_2m,relative_humidity_2m,apparent_temperature,is_day,precipitation,rain,weather_code,wind_speed_10m,wind_direction_10m&hourly=temperature_2m,precipitation,weather_code&daily=weather_code,temperature_2m_max,temperature_2m_min,precipitation_sum&timezone=Asia%2FTaipei&forecast_days=1');
+        const response = await fetch(`https://api.open-meteo.com/v1/forecast?latitude=${cityData.lat}&longitude=${cityData.lon}&current=temperature_2m,relative_humidity_2m,apparent_temperature,is_day,precipitation,rain,weather_code,wind_speed_10m,wind_direction_10m&hourly=temperature_2m,precipitation,weather_code&daily=weather_code,temperature_2m_max,temperature_2m_min,precipitation_sum&timezone=Asia%2FTaipei&forecast_days=1`);
         
         if (!response.ok) {
             throw new Error(`HTTP error! status: ${response.status}`);
@@ -44,7 +69,7 @@ async function getTaipeiWeather() {
         const data = await response.json();
         return data;
     } catch (error) {
-        console.error('獲取天氣資訊時發生錯誤:', error);
+        console.error(`獲取 ${cityData.name} 天氣資訊時發生錯誤:`, error);
         throw error;
     }
 }
@@ -130,6 +155,16 @@ client.on('interactionCreate', async interaction => {
                     value: `${member.user.id}|${displayName}` // 儲存 ID 和顯示名稱
                 };
             });
+    } else if (focusedOption.name === 'city') {
+        // 縣市自動完成
+        const searchTerm = focusedOption.value.toLowerCase();
+        choices = Object.keys(taiwanCities)
+            .filter(city => city.toLowerCase().includes(searchTerm))
+            .slice(0, 25)
+            .map(city => ({
+                name: city,
+                value: city
+            }));
     }
 
     await interaction.respond(choices);
@@ -225,13 +260,23 @@ client.on('interactionCreate', async interaction => {
         await interaction.deferReply();
 
         try {
-            const weatherData = await getTaipeiWeather();
+            // 取得選擇的城市，如果沒有選擇則預設為台北市
+            const selectedCity = interaction.options.getString('city') || '台北市';
+            const cityData = taiwanCities[selectedCity];
+
+            if (!cityData) {
+                return interaction.editReply({
+                    content: '抱歉，找不到指定的縣市。請選擇有效的台灣縣市。'
+                });
+            }
+
+            const weatherData = await getCityWeather(cityData);
             const current = weatherData.current;
             const daily = weatherData.daily;
             
             // 建立天氣資訊嵌入式訊息
             const weatherEmbed = new EmbedBuilder()
-                .setTitle('🌤️ 台北市今日天氣')
+                .setTitle(`🌤️ ${cityData.name}今日天氣`)
                 .setDescription(getWeatherDescription(current.weather_code))
                 .setColor(0x0099FF)
                 .setTimestamp(new Date(current.time))
@@ -464,7 +509,16 @@ client.once('ready', async () => {
             },
             {
                 name: 'weather',
-                description: '查看台北市今日天氣資訊'
+                description: '查看台灣縣市今日天氣資訊',
+                options: [
+                    {
+                        name: 'city',
+                        description: '選擇縣市（預設：台北市）',
+                        type: 3,
+                        required: false,
+                        autocomplete: true
+                    }
+                ]
             }
         ];
 
@@ -473,6 +527,7 @@ client.once('ready', async () => {
         console.log('已註冊的命令:', registeredCommands.map(cmd => cmd.name).join(', '));
         
         console.log('===== Bot 啟動完成 =====');
+        console.log('支援的縣市:', Object.keys(taiwanCities).join(', '));
     } catch (error) {
         console.error('Bot 啟動過程發生錯誤:', error);
     }
