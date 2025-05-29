@@ -60,7 +60,7 @@ async function initDatabase() {
 // 獲取台灣指定縣市天氣資訊
 async function getCityWeather(cityData) {
     try {
-        const response = await fetch(`https://api.open-meteo.com/v1/forecast?latitude=${cityData.lat}&longitude=${cityData.lon}&current=temperature_2m,relative_humidity_2m,apparent_temperature,is_day,precipitation,rain,weather_code,wind_speed_10m,wind_direction_10m&hourly=temperature_2m,precipitation,weather_code&daily=weather_code,temperature_2m_max,temperature_2m_min,precipitation_sum&timezone=Asia%2FTaipei&forecast_days=1`);
+        const response = await fetch(`https://api.open-meteo.com/v1/forecast?latitude=${cityData.lat}&longitude=${cityData.lon}&current=temperature_2m,relative_humidity_2m,apparent_temperature,is_day,precipitation,rain,weather_code,wind_speed_10m,wind_direction_10m&hourly=temperature_2m,precipitation,weather_code&daily=weather_code,temperature_2m_max,temperature_2m_min,precipitation_sum,precipitation_probability_max,precipitation_probability_mean,precipitation_probability_min&timezone=Asia%2FTaipei&forecast_days=1`);
         
         if (!response.ok) {
             throw new Error(`HTTP error! status: ${response.status}`);
@@ -108,6 +108,26 @@ function getWeatherDescription(code) {
     };
     
     return weatherCodes[code] || '🌤️ 未知天氣';
+}
+
+// 根據天氣代碼決定顏色
+function getWeatherColor(code) {
+    if (code === 0) return 0xFFD700; // 晴朗 - 金色
+    if (code >= 1 && code <= 3) return 0x87CEEB; // 晴朗到多雲 - 天藍色
+    if (code >= 45 && code <= 48) return 0x708090; // 霧 - 灰色
+    if (code >= 51 && code <= 67) return 0x4682B4; // 毛毛雨到凍雨 - 鋼藍色
+    if (code >= 71 && code <= 86) return 0xF0F8FF; // 雪 - 愛麗絲藍
+    if (code >= 95 && code <= 99) return 0x483D8B; // 雷暴 - 暗藍紫色
+    return 0x0099FF; // 預設 - 藍色
+}
+
+// 根據降雨機率提供建議
+function getRainAdvice(probability) {
+    if (probability >= 80) return '🌧️ 高機率降雨，記得帶雨具！';
+    if (probability >= 60) return '☂️ 可能下雨，建議攜帶雨傘';
+    if (probability >= 40) return '🌦️ 有機會降雨，可備雨具';
+    if (probability >= 20) return '🌤️ 降雨機率偏低，但不排除';
+    return '☀️ 降雨機率很低，適合戶外活動';
 }
 
 // 風向轉換
@@ -275,10 +295,12 @@ client.on('interactionCreate', async interaction => {
             const daily = weatherData.daily;
             
             // 建立天氣資訊嵌入式訊息
+            const rainAdvice = getRainAdvice(daily.precipitation_probability_max[0]);
+            
             const weatherEmbed = new EmbedBuilder()
                 .setTitle(`🌤️ ${cityData.name}今日天氣`)
-                .setDescription(getWeatherDescription(current.weather_code))
-                .setColor(0x0099FF)
+                .setDescription(`${getWeatherDescription(current.weather_code)}\n\n💡 **今日建議**\n${rainAdvice}`)
+                .setColor(getWeatherColor(current.weather_code))
                 .setTimestamp(new Date(current.time))
                 .addFields(
                     {
@@ -312,6 +334,11 @@ client.on('interactionCreate', async interaction => {
                         inline: true
                     },
                     {
+                        name: '☔ 降雨機率',
+                        value: `最高: ${daily.precipitation_probability_max[0]}%\n平均: ${daily.precipitation_probability_mean[0]}%`,
+                        inline: true
+                    },
+                    {
                         name: '💨 風速',
                         value: `${current.wind_speed_10m} km/h`,
                         inline: true
@@ -325,10 +352,15 @@ client.on('interactionCreate', async interaction => {
                         name: '🌅 時段',
                         value: current.is_day ? '白天' : '夜晚',
                         inline: true
+                    },
+                    {
+                        name: '📊 今日預計總降雨',
+                        value: `${daily.precipitation_sum[0]} mm`,
+                        inline: true
                     }
                 )
                 .setFooter({ 
-                    text: '資料來源：Open-Meteo.com',
+                    text: `資料來源：Open-Meteo.com | 降雨機率為全日預測 | 更新時間：${new Date().toLocaleTimeString('zh-TW')}`,
                     iconURL: 'https://open-meteo.com/favicon.ico'
                 });
 
@@ -528,6 +560,7 @@ client.once('ready', async () => {
         
         console.log('===== Bot 啟動完成 =====');
         console.log('支援的縣市:', Object.keys(taiwanCities).join(', '));
+        console.log('天氣功能: 溫度、濕度、風速、降雨量、降雨機率預測');
     } catch (error) {
         console.error('Bot 啟動過程發生錯誤:', error);
     }
