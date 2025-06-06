@@ -1,12 +1,18 @@
 const { Client, GatewayIntentBits, ButtonBuilder, ActionRowBuilder, ButtonStyle, 
     ModalBuilder, TextInputBuilder, TextInputStyle, EmbedBuilder } = require('discord.js');
 const { Pool } = require('pg');
+const Anthropic = require('@anthropic-ai/sdk');
 require('dotenv').config();
 
 // 創建 PostgreSQL 連接池
 const pool = new Pool({
     connectionString: process.env.DATABASE_URL,
     ssl: process.env.NODE_ENV === 'production' ? { rejectUnauthorized: false } : false
+});
+
+// 初始化 Anthropic 客戶端
+const anthropic = new Anthropic({
+    apiKey: process.env.ANTHROPIC_API_KEY
 });
 
 // 台灣縣市經緯度資料
@@ -34,6 +40,15 @@ const taiwanCities = {
     '連江縣': { lat: 26.197, lon: 119.950, name: '連江縣' },
     '基隆市': { lat: 25.128, lon: 121.739, name: '基隆市' }
 };
+
+// 對話歷史存儲（生產環境建議使用資料庫）
+const conversationHistory = new Map();
+
+// 使用次數限制
+const userUsageMap = new Map();
+
+// 暫存用戶選擇的資料
+let debtData = new Map();
 
 // 初始化資料庫表
 async function initDatabase() {
@@ -137,6 +152,67 @@ function getWindDirection(degree) {
     return directions[index];
 }
 
+// 輔助函數：分割長訊息
+function splitMessage(text, maxLength) {
+    const chunks = [];
+    let currentChunk = '';
+    
+    // 按段落分割
+    const paragraphs = text.split('\n\n');
+    
+    for (const paragraph of paragraphs) {
+        if ((currentChunk + paragraph + '\n\n').length > maxLength) {
+            if (currentChunk) {
+                chunks.push(currentChunk.trim());
+                currentChunk = paragraph + '\n\n';
+            } else {
+                // 如果單段就超過限制，按句子分割
+                const sentences = paragraph.split('. ');
+                for (const sentence of sentences) {
+                    if ((currentChunk + sentence + '. ').length > maxLength) {
+                        if (currentChunk) {
+                            chunks.push(currentChunk.trim());
+                            currentChunk = sentence + '. ';
+                        } else {
+                            // 強制分割
+                            chunks.push(sentence.substring(0, maxLength - 3) + '...');
+                            currentChunk = '...' + sentence.substring(maxLength - 3) + '. ';
+                        }
+                    } else {
+                        currentChunk += sentence + '. ';
+                    }
+                }
+            }
+        } else {
+            currentChunk += paragraph + '\n\n';
+        }
+    }
+    
+    if (currentChunk) {
+        chunks.push(currentChunk.trim());
+    }
+    
+    return chunks.length > 0 ? chunks : [text];
+}
+
+// 使用次數檢查函數
+function checkUsageLimit(userId) {
+    const today = new Date().toDateString();
+    const userKey = `${userId}-${today}`;
+    
+    if (!userUsageMap.has(userKey)) {
+        userUsageMap.set(userKey, 0);
+    }
+    
+    const currentUsage = userUsageMap.get(userKey);
+    if (currentUsage >= 20) { // 每天限制 20 次
+        return false;
+    }
+    
+    userUsageMap.set(userKey, currentUsage + 1);
+    return true;
+}
+
 const client = new Client({
     intents: [
         GatewayIntentBits.Guilds,
@@ -146,9 +222,6 @@ const client = new Client({
         GatewayIntentBits.GuildPresences
     ]
 });
-
-// 暫存用戶選擇的資料
-let debtData = new Map();
 
 // 處理 Autocomplete 互動
 client.on('interactionCreate', async interaction => {
@@ -368,6 +441,150 @@ client.on('interactionCreate', async interaction => {
             });
         }
     }
+    // Claude AI 單次對話
+    else if (interaction.commandName === 'claude') {
+        // 檢查使用次數
+        if (!checkUsageLimit(interaction.user.id)) {
+            return interaction.reply({
+                content: '你今天的 AI 對話次數已用完，明天再來吧！',
+                ephemeral: true
+            });
+        }
+
+        await interaction.deferReply();
+
+        try {
+            const userMessage = interaction.options.getString('message');
+            
+            const message = await anthropic.messages.create({
+                model: "claude-3-5-sonnet-20241022",
+                max_tokens: 1000,
+                temperature: 0.7,
+                system: "你是一個友善且樂於助人的 AI 助手，請用繁體中文回答問題。回答要準確、有用且易於理解。",
+                messages: [
+                    {
+                        role: "user",
+                        content: userMessage
+                    }
+                ]
+            });
+
+            const aiResponse = message.content[0].text;
+
+            if (aiResponse.length > 2000) {
+                const chunks = splitMessage(aiResponse, 2000);
+                await interaction.editReply(chunks[0]);
+                
+                for (let i = 1; i < chunks.length; i++) {
+                    await interaction.followUp(chunks[i]);
+                }
+            } else {
+                await interaction.editReply(aiResponse);
+            }
+
+        } catch (error) {
+            console.error('Claude API 錯誤:', error);
+            
+            let errorMessage = '抱歉，AI 服務暫時無法使用，請稍後再試。';
+            
+            if (error.status === 429) {
+                errorMessage = '請求太頻繁，請稍後再試。';
+            } else if (error.status === 401) {
+                errorMessage = 'API 金鑰無效或已過期。';
+            } else if (error.status === 403) {
+                errorMessage = 'API 額度不足或權限不夠。';
+            }
+
+            await interaction.editReply({
+                content: errorMessage,
+                ephemeral: true
+            });
+        }
+    }
+    // Claude AI 多輪對話
+    else if (interaction.commandName === 'chat') {
+        // 檢查使用次數
+        if (!checkUsageLimit(interaction.user.id)) {
+            return interaction.reply({
+                content: '你今天的 AI 對話次數已用完，明天再來吧！',
+                ephemeral: true
+            });
+        }
+
+        await interaction.deferReply();
+
+        try {
+            const userMessage = interaction.options.getString('message');
+            const conversationId = `${interaction.guild.id}-${interaction.channel.id}`;
+            
+            // 獲取對話歷史
+            if (!conversationHistory.has(conversationId)) {
+                conversationHistory.set(conversationId, []);
+            }
+            
+            const history = conversationHistory.get(conversationId);
+            
+            // 構建訊息陣列
+            const messages = [
+                ...history,
+                {
+                    role: "user",
+                    content: userMessage
+                }
+            ];
+            
+            // 限制對話歷史長度避免超出 token 限制
+            if (messages.length > 20) {
+                messages.splice(0, messages.length - 20);
+            }
+
+            const message = await anthropic.messages.create({
+                model: "claude-3-5-sonnet-20241022",
+                max_tokens: 1000,
+                temperature: 0.7,
+                system: "你是一個友善的 Discord 機器人助手，名字叫做「小克勞德」。請用繁體中文回答問題，回答要有趣且實用。如果用戶問起你的身份，說你是使用 Claude AI 的 Discord 機器人。",
+                messages: messages
+            });
+
+            const aiResponse = message.content[0].text;
+            
+            // 更新對話歷史
+            history.push(
+                { role: "user", content: userMessage },
+                { role: "assistant", content: aiResponse }
+            );
+            conversationHistory.set(conversationId, history);
+
+            // 回應用戶
+            if (aiResponse.length > 2000) {
+                const chunks = splitMessage(aiResponse, 2000);
+                await interaction.editReply(chunks[0]);
+                
+                for (let i = 1; i < chunks.length; i++) {
+                    await interaction.followUp(chunks[i]);
+                }
+            } else {
+                await interaction.editReply(aiResponse);
+            }
+
+        } catch (error) {
+            console.error('Claude 對話錯誤:', error);
+            await interaction.editReply({
+                content: '抱歉，對話服務暫時無法使用，請稍後再試。',
+                ephemeral: true
+            });
+        }
+    }
+    // 清除對話歷史命令
+    else if (interaction.commandName === 'clear-chat') {
+        const conversationId = `${interaction.guild.id}-${interaction.channel.id}`;
+        conversationHistory.delete(conversationId);
+        
+        await interaction.reply({
+            content: '✅ 對話歷史已清除！',
+            ephemeral: true
+        });
+    }
 });
 
 // 處理模態框提交
@@ -490,6 +707,65 @@ client.on('interactionCreate', async interaction => {
     }
 });
 
+// 處理直接 @ 機器人的訊息
+client.on('messageCreate', async message => {
+    // 忽略機器人自己的訊息
+    if (message.author.bot) return;
+    
+    // 只在被 @ 時回應
+    if (message.mentions.has(client.user)) {
+        // 檢查使用次數
+        if (!checkUsageLimit(message.author.id)) {
+            return message.reply('你今天的 AI 對話次數已用完，明天再來吧！');
+        }
+        
+        // 移除 @ 標記
+        const content = message.content.replace(`<@${client.user.id}>`, '').trim();
+        
+        if (!content) return;
+
+        try {
+            // 顯示 "正在輸入..." 狀態
+            await message.channel.sendTyping();
+
+            const response = await anthropic.messages.create({
+                model: "claude-3-5-sonnet-20241022",
+                max_tokens: 800,
+                temperature: 0.7,
+                system: "你是一個友善的 Discord 機器人助手「小克勞德」。請用繁體中文回答問題，回答要簡潔有趣。",
+                messages: [
+                    {
+                        role: "user",
+                        content: content
+                    }
+                ]
+            });
+
+            const aiResponse = response.content[0].text;
+            
+            // 處理長回應
+            if (aiResponse.length > 2000) {
+                const chunks = splitMessage(aiResponse, 2000);
+                let firstChunk = true;
+                for (const chunk of chunks) {
+                    if (firstChunk) {
+                        await message.reply(chunk);
+                        firstChunk = false;
+                    } else {
+                        await message.channel.send(chunk);
+                    }
+                }
+            } else {
+                await message.reply(aiResponse);
+            }
+
+        } catch (error) {
+            console.error('Claude API 錯誤:', error);
+            await message.reply('抱歉，我現在無法回應，請稍後再試。');
+        }
+    }
+});
+
 // 註冊斜線命令
 client.once('ready', async () => {
     try {
@@ -546,6 +822,34 @@ client.once('ready', async () => {
                         autocomplete: true
                     }
                 ]
+            },
+            {
+                name: 'claude',
+                description: '與 Claude AI 單次對話',
+                options: [
+                    {
+                        name: 'message',
+                        description: '你想問的問題',
+                        type: 3,
+                        required: true
+                    }
+                ]
+            },
+            {
+                name: 'chat',
+                description: '與 Claude AI 多輪對話（有記憶）',
+                options: [
+                    {
+                        name: 'message',
+                        description: '你想說的話',
+                        type: 3,
+                        required: true
+                    }
+                ]
+            },
+            {
+                name: 'clear-chat',
+                description: '清除此頻道的對話歷史'
             }
         ];
 
@@ -554,8 +858,9 @@ client.once('ready', async () => {
         console.log('已註冊的命令:', registeredCommands.map(cmd => cmd.name).join(', '));
         
         console.log('===== Bot 啟動完成 =====');
+        console.log('支援功能: 債務管理、天氣查詢、Claude AI 對話');
         console.log('支援的縣市:', Object.keys(taiwanCities).join(', '));
-        console.log('天氣功能: 溫度、濕度、風速、降雨量、降雨機率預測');
+        console.log('AI 對話: 每日限制 20 次，支援單次對話和多輪對話');
     } catch (error) {
         console.error('Bot 啟動過程發生錯誤:', error);
     }
