@@ -460,7 +460,7 @@ client.on('interactionCreate', async interaction => {
             const userMessage = interaction.options.getString('message');
             
             const message = await anthropic.messages.create({
-                model: "claude-3-5-sonnet-20241022",
+                model: "claude-sonnet-4-20250514",
                 max_tokens: 1000,
                 temperature: 0.7,
                 system: "你是一個友善且樂於助人的 AI 助手，請用繁體中文回答問題。回答要準確、有用且易於理解。",
@@ -542,7 +542,7 @@ client.on('interactionCreate', async interaction => {
             }
 
             const message = await anthropic.messages.create({
-                model: "claude-3-5-sonnet-20241022",
+                model: "claude-sonnet-4-20250514",
                 max_tokens: 1000,
                 temperature: 0.7,
                 system: "你是一個友善的 Discord 機器人助手，名字叫做「小克勞德」。請用繁體中文回答問題，回答要有趣且實用。如果用戶問起你的身份，說你是使用 Claude AI 的 Discord 機器人。",
@@ -773,7 +773,7 @@ client.on('messageCreate', async message => {
             await message.channel.sendTyping();
 
             const response = await anthropic.messages.create({
-                model: "claude-3-5-sonnet-20241022",
+                model: "claude-sonnet-4-20250514",
                 max_tokens: 800,
                 temperature: 0.7,
                 system: "你是一個友善的 Discord 機器人助手「小克勞德」。請用繁體中文回答問題，回答要簡潔有趣。",
