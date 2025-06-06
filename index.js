@@ -50,6 +50,9 @@ const userUsageMap = new Map();
 // 暫存用戶選擇的資料
 let debtData = new Map();
 
+// 儲存排程提醒
+let scheduleData = new Map();
+
 // 初始化資料庫表
 async function initDatabase() {
     try {
@@ -585,6 +588,47 @@ client.on('interactionCreate', async interaction => {
             ephemeral: true
         });
     }
+    else if (interaction.commandName === 'schedule') {
+        const name = interaction.options.getString('name');
+        const time = interaction.options.getString('time');
+        
+        // 驗證時間格式 (HH:MM:SS)
+        const timeRegex = /^([0-1]?[0-9]|2[0-3]):([0-5][0-9]):([0-5][0-9])$/;
+        if (!timeRegex.test(time)) {
+            return interaction.reply({
+                content: '時間格式錯誤！請使用 HH:MM:SS 格式（例如：14:30:00）',
+                ephemeral: true
+            });
+        }
+
+        const scheduleId = `${interaction.guild.id}-${interaction.channel.id}-${Date.now()}`;
+        const today = new Date();
+        const [hours, minutes, seconds] = time.split(':').map(Number);
+        
+        // 設定今天的目標時間
+        const targetTime = new Date(today);
+        targetTime.setHours(hours, minutes, seconds, 0);
+        
+        // 如果設定的時間已經過了，設定為明天
+        if (targetTime <= new Date()) {
+            targetTime.setDate(targetTime.getDate() + 1);
+        }
+
+        // 儲存排程資料
+        scheduleData.set(scheduleId, {
+            name: name,
+            time: time,
+            targetTime: targetTime,
+            channelId: interaction.channel.id,
+            userId: interaction.user.id,
+            reminded: false
+        });
+
+        await interaction.reply({
+            content: `⏰ 已設定提醒：將在 ${time} 提醒 "${name}"`,
+            ephemeral: true
+        });
+    }
 });
 
 // 處理模態框提交
@@ -766,6 +810,40 @@ client.on('messageCreate', async message => {
     }
 });
 
+// 時間檢查和提醒功能
+function checkScheduledReminders() {
+    const now = new Date();
+    
+    for (const [scheduleId, schedule] of scheduleData.entries()) {
+        // 檢查是否到達提醒時間且尚未提醒
+        if (!schedule.reminded && now >= schedule.targetTime) {
+            // 獲取頻道並發送提醒
+            const channel = client.channels.cache.get(schedule.channelId);
+            if (channel) {
+                channel.send(`⏰ <@${schedule.userId}> 提醒：${schedule.name}`);
+                
+                // 標記為已提醒
+                schedule.reminded = true;
+                scheduleData.set(scheduleId, schedule);
+                
+                // 5分鐘後清除此排程
+                setTimeout(() => {
+                    scheduleData.delete(scheduleId);
+                }, 5 * 60 * 1000);
+            } else {
+                // 如果頻道不存在，直接刪除排程
+                scheduleData.delete(scheduleId);
+            }
+        }
+        
+        // 清除過期的排程（超過24小時未提醒的）
+        const oneDayAgo = new Date(now.getTime() - 24 * 60 * 60 * 1000);
+        if (schedule.targetTime < oneDayAgo && !schedule.reminded) {
+            scheduleData.delete(scheduleId);
+        }
+    }
+}
+
 // 註冊斜線命令
 client.once('ready', async () => {
     try {
@@ -850,6 +928,24 @@ client.once('ready', async () => {
             {
                 name: 'clear-chat',
                 description: '清除此頻道的對話歷史'
+            },
+            {
+                name: 'schedule',
+                description: '設定時間提醒',
+                options: [
+                    {
+                        name: 'name',
+                        description: '事件名稱',
+                        type: 3,
+                        required: true
+                    },
+                    {
+                        name: 'time',
+                        description: '提醒時間 (HH:MM:SS 格式)',
+                        type: 3,
+                        required: true
+                    }
+                ]
             }
         ];
 
@@ -858,9 +954,12 @@ client.once('ready', async () => {
         console.log('已註冊的命令:', registeredCommands.map(cmd => cmd.name).join(', '));
         
         console.log('===== Bot 啟動完成 =====');
-        console.log('支援功能: 債務管理、天氣查詢、Claude AI 對話');
+        console.log('支援功能: 債務管理、天氣查詢、Claude AI 對話、時間提醒');
         console.log('支援的縣市:', Object.keys(taiwanCities).join(', '));
         console.log('AI 對話: 每日限制 20 次，支援單次對話和多輪對話');
+        
+        // 啟動定時檢查提醒（每30秒檢查一次）
+        setInterval(checkScheduledReminders, 30000);
     } catch (error) {
         console.error('Bot 啟動過程發生錯誤:', error);
     }
