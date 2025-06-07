@@ -2,6 +2,7 @@ const { Client, GatewayIntentBits, ButtonBuilder, ActionRowBuilder, ButtonStyle,
     ModalBuilder, TextInputBuilder, TextInputStyle, EmbedBuilder } = require('discord.js');
 const { Pool } = require('pg');
 const Anthropic = require('@anthropic-ai/sdk');
+const { search } = require('duck-duck-scrape');
 require('dotenv').config();
 
 // 創建 PostgreSQL 連接池
@@ -153,6 +154,48 @@ function getWindDirection(degree) {
     const directions = ['北', '東北', '東', '東南', '南', '西南', '西', '西北'];
     const index = Math.round(degree / 45) % 8;
     return directions[index];
+}
+
+// 網路搜尋功能
+async function webSearch(query) {
+    try {
+        console.log(`執行網路搜尋: ${query}`);
+        
+        // 加入延遲避免請求太頻繁
+        await new Promise(resolve => setTimeout(resolve, 1000));
+        
+        const results = await search(query, {
+            time: 'm'
+        });
+        
+        if (!results || !results.results) {
+            console.log('搜尋結果為空');
+            return [];
+        }
+        
+        const searchResults = results.results.slice(0, 5).map(result => ({
+            title: result.title || '無標題',
+            url: result.url || '',
+            description: result.description || '無描述'
+        }));
+        
+        console.log(`搜尋到 ${searchResults.length} 個結果`);
+        return searchResults;
+    } catch (error) {
+        console.error('網路搜尋錯誤:', error.message);
+        return [];
+    }
+}
+
+// 格式化搜尋結果
+function formatSearchResults(results) {
+    if (results.length === 0) {
+        return '沒有找到相關的網路資訊。';
+    }
+    
+    return results.map((result, index) => 
+        `${index + 1}. **${result.title}**\n${result.description}\n🔗 ${result.url}\n`
+    ).join('\n');
 }
 
 // 輔助函數：分割長訊息
@@ -458,16 +501,29 @@ client.on('interactionCreate', async interaction => {
 
         try {
             const userMessage = interaction.options.getString('message');
+            const enableSearch = interaction.options.getBoolean('search') || false;
+            
+            let searchResults = [];
+            let finalMessage = userMessage;
+            
+            // 如果啟用搜尋功能
+            if (enableSearch) {
+                searchResults = await webSearch(userMessage);
+                if (searchResults.length > 0) {
+                    const searchContext = formatSearchResults(searchResults);
+                    finalMessage = `用戶問題: ${userMessage}\n\n以下是相關的網路搜尋結果:\n${searchContext}\n\n請根據以上搜尋結果回答用戶的問題。`;
+                }
+            }
             
             const message = await anthropic.messages.create({
                 model: "claude-sonnet-4-20250514",
                 max_tokens: 1000,
                 temperature: 0.7,
-                system: "你是一個友善且樂於助人的 AI 助手，請用繁體中文回答問題。回答要準確、有用且易於理解。",
+                system: "你是一個友善且樂於助人的 AI 助手，請用繁體中文回答問題。回答要準確、有用且易於理解。如果有提供網路搜尋結果，請結合這些資訊來回答。",
                 messages: [
                     {
                         role: "user",
-                        content: userMessage
+                        content: finalMessage
                     }
                 ]
             });
@@ -518,6 +574,7 @@ client.on('interactionCreate', async interaction => {
 
         try {
             const userMessage = interaction.options.getString('message');
+            const enableSearch = interaction.options.getBoolean('search') || false;
             const conversationId = `${interaction.guild.id}-${interaction.channel.id}`;
             
             // 獲取對話歷史
@@ -527,12 +584,23 @@ client.on('interactionCreate', async interaction => {
             
             const history = conversationHistory.get(conversationId);
             
+            let finalMessage = userMessage;
+            
+            // 如果啟用搜尋功能
+            if (enableSearch) {
+                const searchResults = await webSearch(userMessage);
+                if (searchResults.length > 0) {
+                    const searchContext = formatSearchResults(searchResults);
+                    finalMessage = `用戶問題: ${userMessage}\n\n以下是相關的網路搜尋結果:\n${searchContext}\n\n請根據以上搜尋結果回答用戶的問題。`;
+                }
+            }
+            
             // 構建訊息陣列
             const messages = [
                 ...history,
                 {
                     role: "user",
-                    content: userMessage
+                    content: finalMessage
                 }
             ];
             
@@ -545,13 +613,13 @@ client.on('interactionCreate', async interaction => {
                 model: "claude-sonnet-4-20250514",
                 max_tokens: 1000,
                 temperature: 0.7,
-                system: "你是一個友善的 Discord 機器人助手，名字叫做「小克勞德」。請用繁體中文回答問題，回答要有趣且實用。如果用戶問起你的身份，說你是使用 Claude AI 的 Discord 機器人。",
+                system: "你是一個友善的 Discord 機器人助手，名字叫做「小克勞德」。請用繁體中文回答問題，回答要有趣且實用。如果用戶問起你的身份，說你是使用 Claude AI 的 Discord 機器人。如果有提供網路搜尋結果，請結合這些資訊來回答。",
                 messages: messages
             });
 
             const aiResponse = message.content[0].text;
             
-            // 更新對話歷史
+            // 更新對話歷史（使用原始用戶訊息，不包含搜尋結果）
             history.push(
                 { role: "user", content: userMessage },
                 { role: "assistant", content: aiResponse }
@@ -910,6 +978,12 @@ client.once('ready', async () => {
                         description: '你想問的問題',
                         type: 3,
                         required: true
+                    },
+                    {
+                        name: 'search',
+                        description: '是否啟用網路搜尋（預設：否）',
+                        type: 5,
+                        required: false
                     }
                 ]
             },
@@ -922,6 +996,12 @@ client.once('ready', async () => {
                         description: '你想說的話',
                         type: 3,
                         required: true
+                    },
+                    {
+                        name: 'search',
+                        description: '是否啟用網路搜尋（預設：否）',
+                        type: 5,
+                        required: false
                     }
                 ]
             },
