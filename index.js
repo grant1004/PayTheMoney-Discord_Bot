@@ -2,7 +2,7 @@ const { Client, GatewayIntentBits, ButtonBuilder, ActionRowBuilder, ButtonStyle,
     ModalBuilder, TextInputBuilder, TextInputStyle, EmbedBuilder } = require('discord.js');
 const { Pool } = require('pg');
 const Anthropic = require('@anthropic-ai/sdk');
-const { search } = require('duck-duck-scrape');
+const { search, SafeSearchType} = require('duck-duck-scrape');
 require('dotenv').config();
 
 // 創建 PostgreSQL 連接池
@@ -181,7 +181,7 @@ async function webSearch(query) {
         const results = await search(query, {
             time: 'm',
             region: 'tw-tzh', // 台灣地區設定
-            safeSearch: 'moderate'
+            safeSearch: SafeSearchType.MODERATE
         });
         
         if (!results || !results.results) {
