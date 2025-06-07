@@ -156,16 +156,32 @@ function getWindDirection(degree) {
     return directions[index];
 }
 
+// 搜尋頻率限制
+const searchCooldown = new Map();
+
 // 網路搜尋功能
 async function webSearch(query) {
     try {
         console.log(`執行網路搜尋: ${query}`);
         
-        // 加入延遲避免請求太頻繁
-        await new Promise(resolve => setTimeout(resolve, 1000));
+        // 檢查搜尋冷卻時間（每個查詢至少間隔5秒）
+        const now = Date.now();
+        const lastSearch = searchCooldown.get('lastSearch') || 0;
+        const timeSinceLastSearch = now - lastSearch;
+        
+        if (timeSinceLastSearch < 5000) {
+            const waitTime = 5000 - timeSinceLastSearch;
+            console.log(`搜尋冷卻中，等待 ${waitTime}ms`);
+            await new Promise(resolve => setTimeout(resolve, waitTime));
+        }
+        
+        // 更新最後搜尋時間
+        searchCooldown.set('lastSearch', Date.now());
         
         const results = await search(query, {
-            time: 'm'
+            time: 'm',
+            region: 'tw-tzh', // 台灣地區設定
+            safeSearch: 'moderate'
         });
         
         if (!results || !results.results) {
@@ -183,6 +199,13 @@ async function webSearch(query) {
         return searchResults;
     } catch (error) {
         console.error('網路搜尋錯誤:', error.message);
+        
+        // 如果是速率限制錯誤，增加更長的冷卻時間
+        if (error.message.includes('anomaly') || error.message.includes('quickly')) {
+            console.log('偵測到速率限制，設定30秒冷卻時間');
+            searchCooldown.set('lastSearch', Date.now() + 25000); // 額外25秒冷卻
+        }
+        
         return [];
     }
 }
