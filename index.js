@@ -680,45 +680,31 @@ client.on('interactionCreate', async interaction => {
         });
     }
     else if (interaction.commandName === 'schedule') {
-        const name = interaction.options.getString('name');
-        const time = interaction.options.getString('time');
-        
-        // 驗證時間格式 (HH:MM:SS)
-        const timeRegex = /^([0-1]?[0-9]|2[0-3]):([0-5][0-9]):([0-5][0-9])$/;
-        if (!timeRegex.test(time)) {
-            return interaction.reply({
-                content: '時間格式錯誤！請使用 HH:MM:SS 格式（例如：14:30:00）',
-                ephemeral: true
-            });
-        }
+        // 顯示排程設定的 Modal
+        const modal = new ModalBuilder()
+            .setCustomId('schedule_modal')
+            .setTitle('設定時間提醒');
 
-        const scheduleId = `${interaction.guild.id}-${interaction.channel.id}-${Date.now()}`;
-        const today = new Date();
-        const [hours, minutes, seconds] = time.split(':').map(Number);
-        
-        // 設定今天的目標時間
-        const targetTime = new Date(today);
-        targetTime.setHours(hours, minutes, seconds, 0);
-        
-        // 如果設定的時間已經過了，設定為明天
-        if (targetTime <= new Date()) {
-            targetTime.setDate(targetTime.getDate() + 1);
-        }
+        const nameInput = new TextInputBuilder()
+            .setCustomId('event_name')
+            .setLabel('事件名稱')
+            .setStyle(TextInputStyle.Short)
+            .setPlaceholder('請輸入要提醒的事件名稱')
+            .setRequired(true);
 
-        // 儲存排程資料
-        scheduleData.set(scheduleId, {
-            name: name,
-            time: time,
-            targetTime: targetTime,
-            channelId: interaction.channel.id,
-            userId: interaction.user.id,
-            reminded: false
-        });
+        const dateTimeInput = new TextInputBuilder()
+            .setCustomId('event_datetime')
+            .setLabel('提醒時間')
+            .setStyle(TextInputStyle.Short)
+            .setPlaceholder('請輸入時間（格式：YYYY-MM-DD HH:MM）')
+            .setRequired(true);
 
-        await interaction.reply({
-            content: `⏰ 已設定提醒：將在 ${time} 提醒 "${name}"`,
-            ephemeral: true
-        });
+        modal.addComponents(
+            new ActionRowBuilder().addComponents(nameInput),
+            new ActionRowBuilder().addComponents(dateTimeInput)
+        );
+
+        await interaction.showModal(modal);
     }
 });
 
@@ -784,6 +770,83 @@ client.on('interactionCreate', async interaction => {
             console.error('處理模態框錯誤:', error);
             await interaction.reply({
                 content: '處理記錄時發生錯誤，請稍後再試。',
+                ephemeral: true
+            });
+        }
+    }
+    else if (interaction.customId === 'schedule_modal') {
+        try {
+            const eventName = interaction.fields.getTextInputValue('event_name');
+            const eventDateTime = interaction.fields.getTextInputValue('event_datetime');
+            
+            // 驗證時間格式 (YYYY-MM-DD HH:MM)
+            const dateTimeRegex = /^(\d{4})-(\d{2})-(\d{2}) (\d{2}):(\d{2})$/;
+            const match = eventDateTime.match(dateTimeRegex);
+            
+            if (!match) {
+                return interaction.reply({
+                    content: '時間格式錯誤！請使用 YYYY-MM-DD HH:MM 格式（例如：2024-12-25 14:30）',
+                    ephemeral: true
+                });
+            }
+            
+            const [, year, month, day, hours, minutes] = match;
+            const targetTime = new Date(
+                parseInt(year), 
+                parseInt(month) - 1, // 月份從0開始
+                parseInt(day), 
+                parseInt(hours), 
+                parseInt(minutes),
+                0
+            );
+            
+            // 檢查設定的時間是否在未來
+            if (targetTime <= new Date()) {
+                return interaction.reply({
+                    content: '設定的時間必須是未來的時間！',
+                    ephemeral: true
+                });
+            }
+            
+            // 檢查設定的時間是否在合理範圍內（一年內）
+            const oneYearFromNow = new Date();
+            oneYearFromNow.setFullYear(oneYearFromNow.getFullYear() + 1);
+            if (targetTime > oneYearFromNow) {
+                return interaction.reply({
+                    content: '設定的時間不能超過一年！',
+                    ephemeral: true
+                });
+            }
+
+            const scheduleId = `${interaction.guild.id}-${interaction.channel.id}-${Date.now()}`;
+            
+            // 儲存排程資料
+            scheduleData.set(scheduleId, {
+                name: eventName,
+                targetTime: targetTime,
+                channelId: interaction.channel.id,
+                userId: interaction.user.id,
+                reminded: false
+            });
+
+            const formattedTime = targetTime.toLocaleString('zh-TW', {
+                year: 'numeric',
+                month: '2-digit',
+                day: '2-digit',
+                hour: '2-digit',
+                minute: '2-digit',
+                timeZone: 'Asia/Taipei'
+            });
+
+            await interaction.reply({
+                content: `⏰ 已設定提醒：將在 ${formattedTime} 提醒「${eventName}」`,
+                ephemeral: true
+            });
+
+        } catch (error) {
+            console.error('處理排程模態框錯誤:', error);
+            await interaction.reply({
+                content: '處理排程時發生錯誤，請稍後再試。',
                 ephemeral: true
             });
         }
@@ -1034,21 +1097,7 @@ client.once('ready', async () => {
             },
             {
                 name: 'schedule',
-                description: '設定時間提醒',
-                options: [
-                    {
-                        name: 'name',
-                        description: '事件名稱',
-                        type: 3,
-                        required: true
-                    },
-                    {
-                        name: 'time',
-                        description: '提醒時間 (HH:MM:SS 格式)',
-                        type: 3,
-                        required: true
-                    }
-                ]
+                description: '設定時間提醒'
             }
         ];
 
