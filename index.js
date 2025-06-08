@@ -395,7 +395,7 @@ client.on('interactionCreate', async interaction => {
             const records = result.rows
                 .filter(row => !row.confirmed)
                 .map(row => 
-                    `日期：${row.date}\n<@${row.debtor_id}> 欠 <@${row.creditor_id}> ${row.amount} 元\n用途：${row.purpose}\n狀態：未收到\n-------------------`
+                    `日期：${row.date}\n<@${row.debtor_id}> 欠 <@${row.creditor_id}> ${Math.round(row.amount)} 元\n用途：${row.purpose}\n狀態：未收到\n-------------------`
                 ).join('\n');
 
             if (records.length === 0) {
@@ -759,7 +759,7 @@ client.on('interactionCreate', async interaction => {
                 .addComponents(confirmButton);
 
             await interaction.reply({
-                content: `${date}\n<@${data.debtor_id}> 今天欠 <@${data.creditor_id}> ${amount} 元\n用途：${purpose}\n狀態：未收到`,
+                content: `${date}\n<@${data.debtor_id}> 今天欠 <@${data.creditor_id}> ${Math.round(amount)} 元\n用途：${purpose}\n狀態：未收到`,
                 components: [row]
             });
 
@@ -891,7 +891,7 @@ client.on('interactionCreate', async interaction => {
             );
 
             await interaction.update({
-                content: `${record.date}\n<@${record.debtor_id}> 今天欠 <@${record.creditor_id}> ${record.amount} 元\n用途：${record.purpose}\n狀態：已收到`,
+                content: `${record.date}\n<@${record.debtor_id}> 今天欠 <@${record.creditor_id}> ${Math.round(record.amount)} 元\n用途：${record.purpose}\n狀態：已收到`,
                 components: []
             });
 
