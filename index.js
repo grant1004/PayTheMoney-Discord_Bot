@@ -91,20 +91,18 @@ function generateDateOptions() {
     return options;
 }
 
-// 生成時間選項（每30分鐘一個）
+// 生成時間選項（每小時一個）
 function generateTimeOptions() {
     const options = [];
     
     for (let hour = 0; hour < 24; hour++) {
-        for (let minute = 0; minute < 60; minute += 30) {
-            const timeStr = `${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')}`;
-            const label = `${timeStr}`;
-            
-            options.push(new StringSelectMenuOptionBuilder()
-                .setLabel(label)
-                .setValue(timeStr)
-            );
-        }
+        const timeStr = `${String(hour).padStart(2, '0')}:00`;
+        const label = `${timeStr}`;
+        
+        options.push(new StringSelectMenuOptionBuilder()
+            .setLabel(label)
+            .setValue(timeStr)
+        );
     }
     
     return options;
