@@ -1,5 +1,5 @@
 const { Client, GatewayIntentBits, ButtonBuilder, ActionRowBuilder, ButtonStyle, 
-    ModalBuilder, TextInputBuilder, TextInputStyle, EmbedBuilder } = require('discord.js');
+    ModalBuilder, TextInputBuilder, TextInputStyle, EmbedBuilder, StringSelectMenuBuilder, StringSelectMenuOptionBuilder } = require('discord.js');
 const { Pool } = require('pg');
 const Anthropic = require('@anthropic-ai/sdk');
 const { search, SafeSearchType} = require('duck-duck-scrape');
@@ -53,6 +53,94 @@ let debtData = new Map();
 
 // 儲存排程提醒
 let scheduleData = new Map();
+
+// 儲存排程設定過程中的暫存資料
+let scheduleSetupData = new Map();
+
+// 生成未來7天的日期選項
+function generateDateOptions() {
+    const options = [];
+    const today = new Date();
+    
+    for (let i = 0; i < 7; i++) {
+        const date = new Date(today);
+        date.setDate(today.getDate() + i);
+        
+        const year = date.getFullYear();
+        const month = String(date.getMonth() + 1).padStart(2, '0');
+        const day = String(date.getDate()).padStart(2, '0');
+        const dateStr = `${year}-${month}-${day}`;
+        
+        let label;
+        if (i === 0) {
+            label = `今天 (${month}/${day})`;
+        } else if (i === 1) {
+            label = `明天 (${month}/${day})`;
+        } else {
+            const weekdays = ['日', '一', '二', '三', '四', '五', '六'];
+            const weekday = weekdays[date.getDay()];
+            label = `${month}/${day} (週${weekday})`;
+        }
+        
+        options.push(new StringSelectMenuOptionBuilder()
+            .setLabel(label)
+            .setValue(dateStr)
+        );
+    }
+    
+    return options;
+}
+
+// 生成時間選項（每30分鐘一個）
+function generateTimeOptions() {
+    const options = [];
+    
+    for (let hour = 0; hour < 24; hour++) {
+        for (let minute = 0; minute < 60; minute += 30) {
+            const timeStr = `${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')}`;
+            const label = `${timeStr}`;
+            
+            options.push(new StringSelectMenuOptionBuilder()
+                .setLabel(label)
+                .setValue(timeStr)
+            );
+        }
+    }
+    
+    return options;
+}
+
+// 生成提前提醒選項
+function generateReminderOptions() {
+    const options = [
+        new StringSelectMenuOptionBuilder()
+            .setLabel('準時提醒（不提前）')
+            .setValue('0'),
+        new StringSelectMenuOptionBuilder()
+            .setLabel('提前 5 分鐘')
+            .setValue('5'),
+        new StringSelectMenuOptionBuilder()
+            .setLabel('提前 10 分鐘')
+            .setValue('10'),
+        new StringSelectMenuOptionBuilder()
+            .setLabel('提前 15 分鐘')
+            .setValue('15'),
+        new StringSelectMenuOptionBuilder()
+            .setLabel('提前 30 分鐘')
+            .setValue('30'),
+        new StringSelectMenuOptionBuilder()
+            .setLabel('提前 1 小時')
+            .setValue('60'),
+        new StringSelectMenuOptionBuilder()
+            .setLabel('提前 2 小時')
+            .setValue('120'),
+        new StringSelectMenuOptionBuilder()
+            .setLabel('提前 24 小時')
+            .setValue('1440')
+    ];
+    
+    return options;
+}
 
 // 初始化資料庫表
 async function initDatabase() {
@@ -680,9 +768,9 @@ client.on('interactionCreate', async interaction => {
         });
     }
     else if (interaction.commandName === 'schedule') {
-        // 顯示排程設定的 Modal
+        // 顯示事件名稱輸入的 Modal
         const modal = new ModalBuilder()
-            .setCustomId('schedule_modal')
+            .setCustomId('schedule_name_modal')
             .setTitle('設定時間提醒');
 
         const nameInput = new TextInputBuilder()
@@ -692,16 +780,8 @@ client.on('interactionCreate', async interaction => {
             .setPlaceholder('請輸入要提醒的事件名稱')
             .setRequired(true);
 
-        const dateTimeInput = new TextInputBuilder()
-            .setCustomId('event_datetime')
-            .setLabel('提醒時間')
-            .setStyle(TextInputStyle.Short)
-            .setPlaceholder('請輸入時間（格式：YYYY-MM-DD HH:MM）')
-            .setRequired(true);
-
         modal.addComponents(
-            new ActionRowBuilder().addComponents(nameInput),
-            new ActionRowBuilder().addComponents(dateTimeInput)
+            new ActionRowBuilder().addComponents(nameInput)
         );
 
         await interaction.showModal(modal);
@@ -774,62 +854,176 @@ client.on('interactionCreate', async interaction => {
             });
         }
     }
-    else if (interaction.customId === 'schedule_modal') {
+    else if (interaction.customId === 'schedule_name_modal') {
         try {
             const eventName = interaction.fields.getTextInputValue('event_name');
-            const eventDateTime = interaction.fields.getTextInputValue('event_datetime');
             
-            // 驗證時間格式 (YYYY-MM-DD HH:MM)
-            const dateTimeRegex = /^(\d{4})-(\d{2})-(\d{2}) (\d{2}):(\d{2})$/;
-            const match = eventDateTime.match(dateTimeRegex);
+            // 儲存事件名稱到暫存資料
+            scheduleSetupData.set(interaction.user.id, {
+                eventName: eventName,
+                step: 'date_selection'
+            });
             
-            if (!match) {
+            // 顯示日期選擇選單
+            const dateSelect = new StringSelectMenuBuilder()
+                .setCustomId('schedule_date_select')
+                .setPlaceholder('請選擇日期')
+                .addOptions(generateDateOptions());
+            
+            const row = new ActionRowBuilder()
+                .addComponents(dateSelect);
+            
+            await interaction.reply({
+                content: `📅 **設定提醒：${eventName}**\n請選擇日期：`,
+                components: [row],
+                ephemeral: true
+            });
+            
+        } catch (error) {
+            console.error('處理事件名稱模態框錯誤:', error);
+            await interaction.reply({
+                content: '處理事件名稱時發生錯誤，請稍後再試。',
+                ephemeral: true
+            });
+        }
+    }
+});
+
+// 處理選擇選單互動
+client.on('interactionCreate', async interaction => {
+    if (!interaction.isStringSelectMenu()) return;
+
+    // 處理日期選擇
+    if (interaction.customId === 'schedule_date_select') {
+        try {
+            const setupData = scheduleSetupData.get(interaction.user.id);
+            if (!setupData) {
                 return interaction.reply({
-                    content: '時間格式錯誤！請使用 YYYY-MM-DD HH:MM 格式（例如：2024-12-25 14:30）',
+                    content: '設定資料已過期，請重新開始。',
                     ephemeral: true
                 });
             }
+
+            const selectedDate = interaction.values[0];
+            setupData.selectedDate = selectedDate;
+            setupData.step = 'time_selection';
+            scheduleSetupData.set(interaction.user.id, setupData);
+
+            // 顯示時間選擇選單
+            const timeSelect = new StringSelectMenuBuilder()
+                .setCustomId('schedule_time_select')
+                .setPlaceholder('請選擇時間')
+                .addOptions(generateTimeOptions());
+
+            const row = new ActionRowBuilder()
+                .addComponents(timeSelect);
+
+            await interaction.update({
+                content: `🕐 **設定提醒：${setupData.eventName}**\n已選擇日期：${selectedDate}\n請選擇時間：`,
+                components: [row]
+            });
+
+        } catch (error) {
+            console.error('處理日期選擇錯誤:', error);
+            await interaction.reply({
+                content: '處理日期選擇時發生錯誤，請稍後再試。',
+                ephemeral: true
+            });
+        }
+    }
+    // 處理時間選擇
+    else if (interaction.customId === 'schedule_time_select') {
+        try {
+            const setupData = scheduleSetupData.get(interaction.user.id);
+            if (!setupData) {
+                return interaction.reply({
+                    content: '設定資料已過期，請重新開始。',
+                    ephemeral: true
+                });
+            }
+
+            const selectedTime = interaction.values[0];
+            setupData.selectedTime = selectedTime;
+            setupData.step = 'reminder_selection';
+            scheduleSetupData.set(interaction.user.id, setupData);
+
+            // 顯示提前提醒選擇選單
+            const reminderSelect = new StringSelectMenuBuilder()
+                .setCustomId('schedule_reminder_select')
+                .setPlaceholder('請選擇提前提醒時間')
+                .addOptions(generateReminderOptions());
+
+            const row = new ActionRowBuilder()
+                .addComponents(reminderSelect);
+
+            await interaction.update({
+                content: `⏰ **設定提醒：${setupData.eventName}**\n已選擇日期：${setupData.selectedDate}\n已選擇時間：${selectedTime}\n請選擇提前提醒時間：`,
+                components: [row]
+            });
+
+        } catch (error) {
+            console.error('處理時間選擇錯誤:', error);
+            await interaction.reply({
+                content: '處理時間選擇時發生錯誤，請稍後再試。',
+                ephemeral: true
+            });
+        }
+    }
+    // 處理提前提醒選擇
+    else if (interaction.customId === 'schedule_reminder_select') {
+        try {
+            const setupData = scheduleSetupData.get(interaction.user.id);
+            if (!setupData) {
+                return interaction.reply({
+                    content: '設定資料已過期，請重新開始。',
+                    ephemeral: true
+                });
+            }
+
+            const reminderMinutes = parseInt(interaction.values[0]);
             
-            const [, year, month, day, hours, minutes] = match;
+            // 計算目標時間
+            const [year, month, day] = setupData.selectedDate.split('-');
+            const [hours, minutes] = setupData.selectedTime.split(':');
             const targetTime = new Date(
-                parseInt(year), 
-                parseInt(month) - 1, // 月份從0開始
-                parseInt(day), 
-                parseInt(hours), 
+                parseInt(year),
+                parseInt(month) - 1,
+                parseInt(day),
+                parseInt(hours),
                 parseInt(minutes),
                 0
             );
-            
-            // 檢查設定的時間是否在未來
+
+            // 檢查時間是否在未來
             if (targetTime <= new Date()) {
-                return interaction.reply({
-                    content: '設定的時間必須是未來的時間！',
-                    ephemeral: true
+                return interaction.update({
+                    content: '❌ 設定的時間必須是未來的時間！請重新設定。',
+                    components: []
                 });
             }
-            
-            // 檢查設定的時間是否在合理範圍內（一年內）
-            const oneYearFromNow = new Date();
-            oneYearFromNow.setFullYear(oneYearFromNow.getFullYear() + 1);
-            if (targetTime > oneYearFromNow) {
-                return interaction.reply({
-                    content: '設定的時間不能超過一年！',
-                    ephemeral: true
-                });
-            }
+
+            // 計算提醒時間
+            const reminderTime = new Date(targetTime.getTime() - reminderMinutes * 60 * 1000);
 
             const scheduleId = `${interaction.guild.id}-${interaction.channel.id}-${Date.now()}`;
             
             // 儲存排程資料
             scheduleData.set(scheduleId, {
-                name: eventName,
+                name: setupData.eventName,
                 targetTime: targetTime,
+                reminderTime: reminderTime,
+                reminderMinutes: reminderMinutes,
                 channelId: interaction.channel.id,
                 userId: interaction.user.id,
-                reminded: false
+                reminded: false,
+                confirmed: false,
+                lastReminderTime: null
             });
 
-            const formattedTime = targetTime.toLocaleString('zh-TW', {
+            // 清除暫存資料
+            scheduleSetupData.delete(interaction.user.id);
+
+            const formattedTargetTime = targetTime.toLocaleString('zh-TW', {
                 year: 'numeric',
                 month: '2-digit',
                 day: '2-digit',
@@ -838,15 +1032,36 @@ client.on('interactionCreate', async interaction => {
                 timeZone: 'Asia/Taipei'
             });
 
-            await interaction.reply({
-                content: `⏰ 已設定提醒：將在 ${formattedTime} 提醒「${eventName}」`,
-                ephemeral: true
+            const formattedReminderTime = reminderTime.toLocaleString('zh-TW', {
+                year: 'numeric',
+                month: '2-digit',
+                day: '2-digit',
+                hour: '2-digit',
+                minute: '2-digit',
+                timeZone: 'Asia/Taipei'
+            });
+
+            let reminderText = '';
+            if (reminderMinutes > 0) {
+                if (reminderMinutes >= 60) {
+                    const hours = Math.floor(reminderMinutes / 60);
+                    reminderText = `\n📢 將在 ${formattedReminderTime} 開始提醒（提前 ${hours} 小時）`;
+                } else {
+                    reminderText = `\n📢 將在 ${formattedReminderTime} 開始提醒（提前 ${reminderMinutes} 分鐘）`;
+                }
+            } else {
+                reminderText = '\n📢 將在事件時間準時提醒';
+            }
+
+            await interaction.update({
+                content: `✅ **提醒設定完成**\n\n📅 事件：${setupData.eventName}\n🕐 時間：${formattedTargetTime}${reminderText}\n\n⚠️ 提醒時需要點擊確認按鈕，否則每 10 分鐘重複提醒。`,
+                components: []
             });
 
         } catch (error) {
-            console.error('處理排程模態框錯誤:', error);
+            console.error('處理提前提醒選擇錯誤:', error);
             await interaction.reply({
-                content: '處理排程時發生錯誤，請稍後再試。',
+                content: '處理提前提醒選擇時發生錯誤，請稍後再試。',
                 ephemeral: true
             });
         }
@@ -899,6 +1114,49 @@ client.on('interactionCreate', async interaction => {
             console.error('處理按鈕點擊錯誤:', error);
             await interaction.reply({
                 content: '處理確認時發生錯誤，請稍後再試。',
+                ephemeral: true
+            });
+        }
+    }
+    // 處理提醒確認按鈕
+    else if (interaction.customId.startsWith('reminder_confirm_')) {
+        try {
+            const scheduleId = interaction.customId.split('reminder_confirm_')[1];
+            
+            const schedule = scheduleData.get(scheduleId);
+            if (!schedule) {
+                return interaction.update({
+                    content: '⚠️ 該提醒已過期或不存在。',
+                    components: []
+                });
+            }
+
+            // 檢查點擊按鈕的人是否為設定提醒的人
+            if (interaction.user.id !== schedule.userId) {
+                return interaction.reply({
+                    content: '只有設定提醒的人可以確認提醒。',
+                    ephemeral: true
+                });
+            }
+
+            // 標記為已確認
+            schedule.confirmed = true;
+            scheduleData.set(scheduleId, schedule);
+
+            await interaction.update({
+                content: `✅ **提醒已確認**\n📅 事件：${schedule.name}\n🕐 時間已到，提醒完成！`,
+                components: []
+            });
+
+            // 延遲清除排程資料（5分鐘後）
+            setTimeout(() => {
+                scheduleData.delete(scheduleId);
+            }, 5 * 60 * 1000);
+
+        } catch (error) {
+            console.error('處理提醒確認錯誤:', error);
+            await interaction.reply({
+                content: '處理提醒確認時發生錯誤，請稍後再試。',
                 ephemeral: true
             });
         }
@@ -969,30 +1227,113 @@ function checkScheduledReminders() {
     const now = new Date();
     
     for (const [scheduleId, schedule] of scheduleData.entries()) {
-        // 檢查是否到達提醒時間且尚未提醒
-        if (!schedule.reminded && now >= schedule.targetTime) {
-            // 獲取頻道並發送提醒
-            const channel = client.channels.cache.get(schedule.channelId);
-            if (channel) {
-                channel.send(`⏰ <@${schedule.userId}> 提醒：${schedule.name}`);
-                
-                // 標記為已提醒
-                schedule.reminded = true;
-                scheduleData.set(scheduleId, schedule);
-                
-                // 5分鐘後清除此排程
-                setTimeout(() => {
+        const channel = client.channels.cache.get(schedule.channelId);
+        
+        // 如果頻道不存在，直接刪除排程
+        if (!channel) {
+            scheduleData.delete(scheduleId);
+            continue;
+        }
+
+        // 檢查是否到達提醒時間且已確認，清除排程
+        if (schedule.confirmed) {
+            continue; // 已確認的提醒不需要再處理
+        }
+
+        // 檢查是否到達提醒時間
+        const shouldRemind = now >= schedule.reminderTime;
+        
+        if (shouldRemind && !schedule.reminded) {
+            // 第一次提醒
+            const confirmButton = new ButtonBuilder()
+                .setCustomId(`reminder_confirm_${scheduleId}`)
+                .setLabel('確認收到提醒')
+                .setStyle(ButtonStyle.Success)
+                .setEmoji('✅');
+
+            const row = new ActionRowBuilder()
+                .addComponents(confirmButton);
+
+            const targetTimeStr = schedule.targetTime.toLocaleString('zh-TW', {
+                year: 'numeric',
+                month: '2-digit',
+                day: '2-digit',
+                hour: '2-digit',
+                minute: '2-digit',
+                timeZone: 'Asia/Taipei'
+            });
+
+            let reminderText = '';
+            if (schedule.reminderMinutes > 0) {
+                if (schedule.reminderMinutes >= 60) {
+                    const hours = Math.floor(schedule.reminderMinutes / 60);
+                    reminderText = `（提前 ${hours} 小時提醒）`;
+                } else {
+                    reminderText = `（提前 ${schedule.reminderMinutes} 分鐘提醒）`;
+                }
+            }
+
+            channel.send({
+                content: `⏰ <@${schedule.userId}> **提醒時間到了！**\n\n📅 **事件：** ${schedule.name}\n🕐 **時間：** ${targetTimeStr} ${reminderText}\n\n⚠️ 請點擊下方按鈕確認收到提醒，否則每 10 分鐘會重複提醒。`,
+                components: [row]
+            });
+
+            // 標記為已提醒並記錄提醒時間
+            schedule.reminded = true;
+            schedule.lastReminderTime = now;
+            scheduleData.set(scheduleId, schedule);
+        }
+        // 檢查是否需要重複提醒（每10分鐘）
+        else if (schedule.reminded && !schedule.confirmed && schedule.lastReminderTime) {
+            const timeSinceLastReminder = now.getTime() - schedule.lastReminderTime.getTime();
+            const tenMinutes = 10 * 60 * 1000; // 10分鐘的毫秒數
+
+            if (timeSinceLastReminder >= tenMinutes) {
+                // 檢查是否超過事件時間太久（超過2小時就停止提醒）
+                const timeSinceTarget = now.getTime() - schedule.targetTime.getTime();
+                const twoHours = 2 * 60 * 60 * 1000; // 2小時的毫秒數
+
+                if (timeSinceTarget > twoHours) {
+                    // 超過事件時間2小時，停止提醒並清除排程
+                    channel.send({
+                        content: `⏰ <@${schedule.userId}> 事件「${schedule.name}」的提醒已超時停止。`
+                    });
                     scheduleData.delete(scheduleId);
-                }, 5 * 60 * 1000);
-            } else {
-                // 如果頻道不存在，直接刪除排程
-                scheduleData.delete(scheduleId);
+                } else {
+                    // 發送重複提醒
+                    const confirmButton = new ButtonBuilder()
+                        .setCustomId(`reminder_confirm_${scheduleId}`)
+                        .setLabel('確認收到提醒')
+                        .setStyle(ButtonStyle.Success)
+                        .setEmoji('✅');
+
+                    const row = new ActionRowBuilder()
+                        .addComponents(confirmButton);
+
+                    const targetTimeStr = schedule.targetTime.toLocaleString('zh-TW', {
+                        year: 'numeric',
+                        month: '2-digit',
+                        day: '2-digit',
+                        hour: '2-digit',
+                        minute: '2-digit',
+                        timeZone: 'Asia/Taipei'
+                    });
+
+                    channel.send({
+                        content: `🔔 <@${schedule.userId}> **重複提醒**\n\n📅 **事件：** ${schedule.name}\n🕐 **時間：** ${targetTimeStr}\n\n⚠️ 請點擊按鈕確認收到提醒。`,
+                        components: [row]
+                    });
+
+                    // 更新最後提醒時間
+                    schedule.lastReminderTime = now;
+                    scheduleData.set(scheduleId, schedule);
+                }
             }
         }
         
-        // 清除過期的排程（超過24小時未提醒的）
+        // 清除過期的排程（超過24小時未處理的）
         const oneDayAgo = new Date(now.getTime() - 24 * 60 * 60 * 1000);
-        if (schedule.targetTime < oneDayAgo && !schedule.reminded) {
+        if (schedule.targetTime < oneDayAgo && !schedule.confirmed) {
             scheduleData.delete(scheduleId);
         }
     }
