@@ -988,8 +988,9 @@ client.on('interactionCreate', async interaction => {
             const taipeiTimeString = `${year}-${month.padStart(2, '0')}-${day.padStart(2, '0')}T${hours.padStart(2, '0')}:${minutes.padStart(2, '0')}:00+08:00`;
             const targetTime = new Date(taipeiTimeString);
 
-            // 檢查時間是否在未來
-            if (targetTime <= new Date()) {
+            // 檢查時間是否在未來（使用台北時區）
+            const nowTaipei = new Date(new Date().toLocaleString("en-US", {timeZone: "Asia/Taipei"}));
+            if (targetTime <= nowTaipei) {
                 return interaction.update({
                     content: '❌ 設定的時間必須是未來的時間！請重新設定。',
                     components: []
@@ -1218,7 +1219,8 @@ client.on('messageCreate', async message => {
 
 // 時間檢查和提醒功能
 function checkScheduledReminders() {
-    const now = new Date();
+    // 取得台北時區的當前時間
+    const now = new Date(new Date().toLocaleString("en-US", {timeZone: "Asia/Taipei"}));
     
     for (const [scheduleId, schedule] of scheduleData.entries()) {
         const channel = client.channels.cache.get(schedule.channelId);
