@@ -1217,10 +1217,52 @@ client.on('messageCreate', async message => {
     }
 });
 
+// 自動清理資料庫功能
+async function cleanupDatabase() {
+    try {
+        console.log('開始執行資料庫清理...');
+        
+        // 清理已確認付款的債務記錄 (confirmed = true)
+        const result = await pool.query(
+            'DELETE FROM debts WHERE confirmed = TRUE'
+        );
+        
+        const deletedCount = result.rowCount;
+        console.log(`資料庫清理完成，已刪除 ${deletedCount} 筆已確認的債務記錄`);
+        
+        return deletedCount;
+    } catch (error) {
+        console.error('資料庫清理錯誤:', error);
+        return 0;
+    }
+}
+
+// 檢查是否為每日 00:00 (台北時區)
+function shouldRunDailyCleanup() {
+    const now = new Date(new Date().toLocaleString("en-US", {timeZone: "Asia/Taipei"}));
+    const hour = now.getHours();
+    const minute = now.getMinutes();
+    
+    // 檢查是否為 00:00 (允許在 00:00-00:01 之間執行)
+    return hour === 0 && minute === 0;
+}
+
+// 記錄上次清理日期
+let lastCleanupDate = null;
+
 // 時間檢查和提醒功能
 function checkScheduledReminders() {
     // 取得台北時區的當前時間
     const now = new Date(new Date().toLocaleString("en-US", {timeZone: "Asia/Taipei"}));
+    
+    // 檢查是否需要執行每日資料庫清理
+    const today = now.toDateString();
+    if (shouldRunDailyCleanup() && lastCleanupDate !== today) {
+        cleanupDatabase().then(deletedCount => {
+            console.log(`每日資料庫清理執行完成 (${today})，清理了 ${deletedCount} 筆記錄`);
+        });
+        lastCleanupDate = today;
+    }
     
     for (const [scheduleId, schedule] of scheduleData.entries()) {
         const channel = client.channels.cache.get(schedule.channelId);
