@@ -989,7 +989,8 @@ client.on('interactionCreate', async interaction => {
             const targetTime = new Date(taipeiTimeString);
 
             // 檢查時間是否在未來（使用台北時區）
-            const nowTaipei = new Date(new Date().toLocaleString("en-US", {timeZone: "Asia/Taipei"}));
+            const nowUTC = new Date();
+            const nowTaipei = new Date(nowUTC.getTime() + (8 * 60 * 60 * 1000)); // UTC+8
             if (targetTime <= nowTaipei) {
                 return interaction.update({
                     content: '❌ 設定的時間必須是未來的時間！請重新設定。',
@@ -1239,7 +1240,8 @@ async function cleanupDatabase() {
 
 // 檢查是否為每日 00:00 (台北時區)
 function shouldRunDailyCleanup() {
-    const now = new Date(new Date().toLocaleString("en-US", {timeZone: "Asia/Taipei"}));
+    const nowUTC = new Date();
+    const now = new Date(nowUTC.getTime() + (8 * 60 * 60 * 1000)); // UTC+8
     const hour = now.getHours();
     const minute = now.getMinutes();
     
@@ -1253,7 +1255,8 @@ let lastCleanupDate = null;
 // 時間檢查和提醒功能
 function checkScheduledReminders() {
     // 取得台北時區的當前時間
-    const now = new Date(new Date().toLocaleString("en-US", {timeZone: "Asia/Taipei"}));
+    const nowUTC = new Date();
+    const now = new Date(nowUTC.getTime() + (8 * 60 * 60 * 1000)); // UTC+8
     
     // 檢查是否需要執行每日資料庫清理
     const today = now.toDateString();
