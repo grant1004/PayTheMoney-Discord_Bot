@@ -1,7 +1,7 @@
 const { Client, GatewayIntentBits, ButtonBuilder, ActionRowBuilder, ButtonStyle,
     ModalBuilder, TextInputBuilder, TextInputStyle, EmbedBuilder, StringSelectMenuBuilder, StringSelectMenuOptionBuilder } = require('discord.js');
 const express = require('express');
-const { verifyKeyMiddleware } = require('discord-interactions');
+const nacl = require('tweetnacl');
 const { Pool } = require('pg');
 const Anthropic = require('@anthropic-ai/sdk');
 const { search, SafeSearchType} = require('duck-duck-scrape');
@@ -1561,8 +1561,26 @@ const CLUCODE_PUBLIC_KEY = 'c326e4274894f034d6825e6f6cfa2e3df1c921f7436c82a848f9
 const interactionsApp = express();
 const HTTP_PORT = process.env.PORT || 7414;
 
-interactionsApp.post('/interactions', verifyKeyMiddleware(CLUCODE_PUBLIC_KEY), async (req, res) => {
-    const interaction = req.body;
+interactionsApp.use(express.raw({ type: 'application/json' }));
+
+interactionsApp.post('/interactions', async (req, res) => {
+    const signature = req.headers['x-signature-ed25519'];
+    const timestamp = req.headers['x-signature-timestamp'];
+    const rawBody = req.body;
+
+    // 驗證 Discord 簽名
+    try {
+        const isValid = nacl.sign.detached.verify(
+            Buffer.from(timestamp + rawBody.toString()),
+            Buffer.from(signature, 'hex'),
+            Buffer.from(CLUCODE_PUBLIC_KEY, 'hex')
+        );
+        if (!isValid) return res.status(401).send('Invalid signature');
+    } catch (e) {
+        return res.status(401).send('Invalid signature');
+    }
+
+    const interaction = JSON.parse(rawBody.toString());
 
     // Discord PING 驗證
     if (interaction.type === 1) {
