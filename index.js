@@ -1,5 +1,7 @@
-const { Client, GatewayIntentBits, ButtonBuilder, ActionRowBuilder, ButtonStyle, 
+const { Client, GatewayIntentBits, ButtonBuilder, ActionRowBuilder, ButtonStyle,
     ModalBuilder, TextInputBuilder, TextInputStyle, EmbedBuilder, StringSelectMenuBuilder, StringSelectMenuOptionBuilder } = require('discord.js');
+const express = require('express');
+const { verifyKeyMiddleware } = require('discord-interactions');
 const { Pool } = require('pg');
 const Anthropic = require('@anthropic-ai/sdk');
 const { search, SafeSearchType} = require('duck-duck-scrape');
@@ -1552,6 +1554,61 @@ client.on('error', error => {
 process.on('unhandledRejection', error => {
     console.error('未處理的 Promise 拒絕:', error);
 });
+
+// ─── CLUCODE Interactions HTTP Server ───────────────────────────────────────
+// 處理 CLUCODE bot 發出的按鈕互動（水提醒等），透過 HTTP POST 接收 Discord 互動
+const CLUCODE_PUBLIC_KEY = 'c326e4274894f034d6825e6f6cfa2e3df1c921f7436c82a848f9cd4bc2fd2676';
+const interactionsApp = express();
+const HTTP_PORT = process.env.PORT || 7414;
+
+interactionsApp.post('/interactions', verifyKeyMiddleware(CLUCODE_PUBLIC_KEY), async (req, res) => {
+    const interaction = req.body;
+
+    // Discord PING 驗證
+    if (interaction.type === 1) {
+        return res.json({ type: 1 });
+    }
+
+    // 按鈕互動
+    if (interaction.type === 3) {
+        const customId = interaction.data?.custom_id;
+        const userObj = interaction.member?.user || interaction.user;
+        const userId = userObj?.id;
+        const userName = userObj?.global_name || userObj?.username;
+
+        if (customId === 'water_yes') {
+            try {
+                const today = new Date().toISOString().split('T')[0];
+                const existing = await pool.query(
+                    'SELECT id FROM water_log WHERE user_id = $1 AND date = $2',
+                    [userId, today]
+                );
+                if (existing.rows.length > 0) {
+                    return res.json({ type: 4, data: { content: '你今天已經確認過喝水了！繼續保持 💧', flags: 64 } });
+                }
+                await pool.query(
+                    'INSERT INTO water_log (user_id, user_name, date) VALUES ($1, $2, $3)',
+                    [userId, userName, today]
+                );
+                return res.json({ type: 4, data: { content: `✅ <@${userId}> 已確認喝水！繼續保持健康 💧` } });
+            } catch (error) {
+                console.error('喝水確認錯誤:', error);
+                return res.json({ type: 4, data: { content: '處理時發生錯誤，請稍後再試。', flags: 64 } });
+            }
+        }
+
+        if (customId === 'water_no') {
+            return res.json({ type: 4, data: { content: `⚠️ <@${userId}> 還沒喝水！快去喝一杯水吧 🚰` } });
+        }
+    }
+
+    return res.status(400).json({ error: 'Unknown interaction type' });
+});
+
+interactionsApp.listen(HTTP_PORT, () => {
+    console.log(`Interactions HTTP server listening on port ${HTTP_PORT}`);
+});
+// ────────────────────────────────────────────────────────────────────────────
 
 // 在程式結束時關閉資料庫連接
 process.on('SIGINT', async () => {
