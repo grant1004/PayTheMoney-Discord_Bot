@@ -1114,6 +1114,51 @@ client.on('interactionCreate', async interaction => {
             });
         }
     }
+    // 處理喝水確認按鈕
+    else if (interaction.customId === 'water_yes') {
+        try {
+            const today = new Date().toISOString().split('T')[0];
+
+            // 檢查今天是否已經確認過
+            const existing = await pool.query(
+                'SELECT id FROM water_log WHERE user_id = $1 AND date = $2',
+                [interaction.user.id, today]
+            );
+
+            if (existing.rows.length > 0) {
+                return interaction.reply({
+                    content: '你今天已經確認過喝水了！繼續保持 💧',
+                    flags: ['Ephemeral']
+                });
+            }
+
+            await pool.query(
+                'INSERT INTO water_log (user_id, user_name, date) VALUES ($1, $2, $3)',
+                [interaction.user.id, interaction.user.displayName || interaction.user.username, today]
+            );
+
+            await interaction.reply({
+                content: `✅ <@${interaction.user.id}> 已確認喝水！繼續保持健康 💧`,
+            });
+
+        } catch (error) {
+            console.error('處理喝水確認錯誤:', error);
+            await interaction.reply({
+                content: '處理確認時發生錯誤，請稍後再試。',
+                flags: ['Ephemeral']
+            });
+        }
+    }
+    // 處理還沒喝水按鈕
+    else if (interaction.customId === 'water_no') {
+        try {
+            await interaction.reply({
+                content: `⚠️ <@${interaction.user.id}> 還沒喝水！快去喝一杯水吧 🚰`,
+            });
+        } catch (error) {
+            console.error('處理喝水未確認錯誤:', error);
+        }
+    }
     // 處理提醒確認按鈕
     else if (interaction.customId.startsWith('reminder_confirm_')) {
         try {
