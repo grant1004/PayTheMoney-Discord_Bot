@@ -59,6 +59,9 @@ let scheduleData = new Map();
 // 儲存排程設定過程中的暫存資料
 let scheduleSetupData = new Map();
 
+// 儲存 CS2 demo 查詢暫存
+let cs2DemoData = new Map();
+
 // 生成未來7天的日期選項
 function generateDateOptions() {
     const options = [];
@@ -786,6 +789,89 @@ client.on('interactionCreate', async interaction => {
 
         await interaction.showModal(modal);
     }
+    else if (interaction.commandName === 'cs2demos') {
+        await interaction.deferReply({ ephemeral: true });
+        try {
+            const steamApiKey = process.env.STEAM_API_KEY;
+            const steamId = process.env.STEAM_ID;
+
+            if (!steamApiKey || !steamId) {
+                return interaction.editReply('❌ Steam API 未設定，請聯繫管理員。');
+            }
+
+            const dateStr = interaction.options.getString('date');
+            const nowTW = new Date(new Date().toLocaleString('en-US', { timeZone: 'Asia/Taipei' }));
+            const targetDate = dateStr ? new Date(dateStr) : nowTW;
+
+            const startOfDay = new Date(targetDate.getFullYear(), targetDate.getMonth(), targetDate.getDate(), 0, 0, 0, 0);
+            const endOfDay = new Date(targetDate.getFullYear(), targetDate.getMonth(), targetDate.getDate(), 23, 59, 59, 999);
+
+            const apiUrl = `https://api.steampowered.com/ICSGOMatch_730/GetMatchHistory/v1/?key=${steamApiKey}&steamid=${steamId}&count=50`;
+            const response = await fetch(apiUrl);
+
+            if (!response.ok) {
+                return interaction.editReply(`❌ Steam API 回傳錯誤：${response.status}`);
+            }
+
+            const data = await response.json();
+
+            if (!data.result || data.result.status !== 1) {
+                return interaction.editReply('❌ 無法取得對戰記錄。請確認 Steam 對戰記錄已設為公開。');
+            }
+
+            const MAP_NAMES = {
+                'de_dust2': 'Dust2', 'de_mirage': 'Mirage', 'de_inferno': 'Inferno',
+                'de_nuke': 'Nuke', 'de_overpass': 'Overpass', 'de_ancient': 'Ancient',
+                'de_anubis': 'Anubis', 'de_vertigo': 'Vertigo', 'de_train': 'Train'
+            };
+
+            const matches = (data.result.matches || []).filter(match => {
+                const d = new Date(new Date(match.matchtime * 1000).toLocaleString('en-US', { timeZone: 'Asia/Taipei' }));
+                return d >= startOfDay && d <= endOfDay;
+            });
+
+            if (matches.length === 0) {
+                const label = targetDate.toLocaleDateString('zh-TW', { timeZone: 'Asia/Taipei' });
+                return interaction.editReply(`📭 ${label} 沒有找到比賽記錄。`);
+            }
+
+            cs2DemoData.set(interaction.user.id, { matches, timestamp: Date.now() });
+
+            const options = matches.map((match, index) => {
+                const matchTime = new Date(match.matchtime * 1000).toLocaleString('zh-TW', { timeZone: 'Asia/Taipei', hour: '2-digit', minute: '2-digit' });
+                const lastRound = match.roundstatsall?.[match.roundstatsall.length - 1];
+                const mapRaw = lastRound?.map || 'unknown';
+                const mapName = MAP_NAMES[mapRaw] || mapRaw;
+                const matchId = String(match.matchid || match.watchablematchinfo?.match_id || index);
+                const reservationId = String(match.watchablematchinfo?.reservation_id || match.reservationid || '');
+
+                return new StringSelectMenuOptionBuilder()
+                    .setLabel(`${mapName} - ${matchTime}`)
+                    .setValue(JSON.stringify({ matchid: matchId, map: mapRaw, time: matchTime, reservationid: reservationId }))
+                    .setDescription(`Match ID: ${matchId.slice(0, 50)}`);
+            });
+
+            const select = new StringSelectMenuBuilder()
+                .setCustomId('cs2_demo_select')
+                .setPlaceholder('選擇要下載的 demo')
+                .setMinValues(1)
+                .setMaxValues(Math.min(options.length, 25))
+                .addOptions(options);
+
+            const row = new ActionRowBuilder().addComponents(select);
+            const dateLabel = targetDate.toLocaleDateString('zh-TW', { timeZone: 'Asia/Taipei' });
+
+            await interaction.editReply({
+                content: `🎮 **${dateLabel} 的 CS2 比賽（${matches.length} 場）**
+選擇要下載的 demo：`,
+                components: [row]
+            });
+
+        } catch (error) {
+            console.error('cs2demos 指令錯誤:', error);
+            await interaction.editReply('❌ 取得比賽記錄時發生錯誤，請稍後再試。');
+        }
+    }
 });
 
 // 處理模態框提交
@@ -1062,6 +1148,56 @@ client.on('interactionCreate', async interaction => {
                 content: '處理提前提醒選擇時發生錯誤，請稍後再試。',
                 ephemeral: true
             });
+        }
+    }
+
+    if (interaction.customId === 'cs2_demo_select') {
+        try {
+            await interaction.deferUpdate();
+
+            const queueChannelId = process.env.CS2_QUEUE_CHANNEL_ID;
+            if (!queueChannelId) {
+                return interaction.editReply({ content: '❌ CS2 隊列頻道未設定。', components: [] });
+            }
+
+            const queueChannel = client.channels.cache.get(queueChannelId);
+            if (!queueChannel) {
+                return interaction.editReply({ content: '❌ 找不到 CS2 隊列頻道。', components: [] });
+            }
+
+            const MAP_NAMES = {
+                'de_dust2': 'Dust2', 'de_mirage': 'Mirage', 'de_inferno': 'Inferno',
+                'de_nuke': 'Nuke', 'de_overpass': 'Overpass', 'de_ancient': 'Ancient',
+                'de_anubis': 'Anubis', 'de_vertigo': 'Vertigo', 'de_train': 'Train'
+            };
+
+            const selectedMatches = interaction.values.map(v => JSON.parse(v));
+
+            const queuePayload = {
+                type: 'CS2_DOWNLOAD',
+                requestedBy: interaction.user.tag,
+                requestedAt: new Date().toISOString(),
+                matches: selectedMatches
+            };
+
+            await queueChannel.send('```json
+' + JSON.stringify(queuePayload, null, 2) + '
+```');
+
+            const mapsList = selectedMatches.map(m => `• ${MAP_NAMES[m.map] || m.map} (${m.time})`).join('
+');
+
+            await interaction.editReply({
+                content: `✅ **已加入下載佇列（${selectedMatches.length} 場）**
+${mapsList}
+
+⏳ 本機 Service 將開始下載...`,
+                components: []
+            });
+
+        } catch (error) {
+            console.error('cs2_demo_select 錯誤:', error);
+            await interaction.editReply({ content: '❌ 加入佇列時發生錯誤。', components: [] });
         }
     }
 });
@@ -1527,6 +1663,18 @@ client.once('ready', async () => {
             {
                 name: 'schedule',
                 description: '設定時間提醒'
+            },
+            {
+                name: 'cs2demos',
+                description: '查詢並下載 CS2 對戰 demo',
+                options: [
+                    {
+                        name: 'date',
+                        description: '查詢日期（格式：YYYY-MM-DD，預設今天）',
+                        type: 3,
+                        required: false
+                    }
+                ]
             }
         ];
 
