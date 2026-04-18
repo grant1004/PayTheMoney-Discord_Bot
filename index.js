@@ -1180,12 +1180,9 @@ client.on('interactionCreate', async interaction => {
                 matches: selectedMatches
             };
 
-            await queueChannel.send('```json
-' + JSON.stringify(queuePayload, null, 2) + '
-```');
+            await queueChannel.send('CS2_DL:' + JSON.stringify(queuePayload));
 
-            const mapsList = selectedMatches.map(m => `• ${MAP_NAMES[m.map] || m.map} (${m.time})`).join('
-');
+            const mapsList = selectedMatches.map(m => `• ${MAP_NAMES[m.map] || m.map} (${m.time})`).join('\n');
 
             await interaction.editReply({
                 content: `✅ **已加入下載佇列（${selectedMatches.length} 場）**
