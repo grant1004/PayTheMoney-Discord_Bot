@@ -1103,7 +1103,10 @@ client.on('interactionCreate', async interaction => {
     }
 
     if (interaction.customId === 'cs2_demo_select') {
-        const selectedMatches = interaction.values.map(v => JSON.parse(v));
+        const selectedIndexes = interaction.values.map(v => parseInt(v));
+        const storedMatches = cs2SelectedMatches.get(interaction.user.id + '_matches');
+        if (!storedMatches) return interaction.reply({ content: '❌ 資料已過期，請重新執行 /cs2demos。', ephemeral: true });
+        const selectedMatches = selectedIndexes.map(i => storedMatches[i]).filter(Boolean);
         cs2SelectedMatches.set(interaction.user.id, selectedMatches);
         const MAP_NAMES_SM = {
             'de_dust2': 'Dust2', 'de_mirage': 'Mirage', 'de_inferno': 'Inferno',
@@ -1114,15 +1117,15 @@ client.on('interactionCreate', async interaction => {
             .setCustomId('cs2_filename_modal')
             .setTitle('設定檔案名稱');
         selectedMatches.forEach((match, i) => {
-            const mapName = MAP_NAMES_SM[match.map] || match.map.replace('de_', '');
+            const mapName = match.mapName || MAP_NAMES_SM[match.map] || '未知地圖';
             const d = new Date();
             const yy = d.toLocaleDateString('zh-TW', { timeZone: 'Asia/Taipei' }).replace(/\//g, '');
             const defaultName = yy + '_' + mapName + '_' + match.time.replace(':', '');
             const input = new TextInputBuilder()
                 .setCustomId('filename_' + i)
-                .setLabel(mapName + ' (' + match.time + ')')
+                .setLabel((mapName + ' (' + match.time + ')').slice(0, 45))
                 .setStyle(TextInputStyle.Short)
-                .setValue(defaultName)
+                .setValue(defaultName.slice(0, 100))
                 .setRequired(true);
             modal.addComponents(new ActionRowBuilder().addComponents(input));
         });
@@ -1715,7 +1718,6 @@ process.on('SIGINT', async () => {
 // CS2 demo queue channel listener
 client.on('messageCreate', async message => {
     if (message.channelId !== process.env.CS2_QUEUE_CHANNEL_ID) return;
-    console.log('[CS2 Debug] ch=' + message.channelId + ' expected=' + process.env.CS2_QUEUE_CHANNEL_ID + ' bot=' + message.author.bot + ' start=' + message.content.slice(0, 30));
     if (!message.author.bot) return;
     if (!message.content.startsWith('CS2_MATCHES:')) return;
     try {
@@ -1730,17 +1732,14 @@ client.on('messageCreate', async message => {
         if (!matches || matches.length === 0) {
             return pending.interaction.editReply('📭 沒有找到比賽記錄。');
         }
-        const MAP_NAMES_ML = {
-            'de_dust2': 'Dust2', 'de_mirage': 'Mirage', 'de_inferno': 'Inferno',
-            'de_nuke': 'Nuke', 'de_overpass': 'Overpass', 'de_ancient': 'Ancient',
-            'de_anubis': 'Anubis', 'de_vertigo': 'Vertigo', 'de_train': 'Train'
-        };
+        // 存入 Map 供後續 select menu 使用
+        cs2SelectedMatches.set(userId + '_matches', matches);
         const limited = matches.slice(0, 5);
-        const options = limited.map(m => {
-            const mapName = MAP_NAMES_ML[m.map] || m.map.replace('de_', '');
+        const options = limited.map((m, i) => {
+            const label = (m.mapName || '未知地圖') + ' - ' + m.time;
             return new StringSelectMenuOptionBuilder()
-                .setLabel(mapName + ' - ' + m.time)
-                .setValue(JSON.stringify({ matchid: m.matchid, map: m.map, time: m.time, demoUrl: m.demoUrl }))
+                .setLabel(label.slice(0, 100))
+                .setValue(String(i))
                 .setDescription('Match ID: ' + String(m.matchid).slice(-8));
         });
         const select = new StringSelectMenuBuilder()
