@@ -1702,23 +1702,7 @@ interactionsApp.post('/interactions', async (req, res) => {
     return res.status(400).json({ error: 'Unknown interaction type' });
 });
 
-interactionsApp.listen(HTTP_PORT, () => {
-    console.log(`Interactions HTTP server listening on port ${HTTP_PORT}`);
-});
-// ────────────────────────────────────────────────────────────────────────────
-
-// 在程式結束時關閉資料庫連接
-process.on('SIGINT', async () => {
-    await pool.end();
-    console.log('資料庫連接已關閉');
-    process.exit(0);
-});
-
-
-
-client.login(process.env.DISCORD_TOKEN);
-
-app.post('/cs2-callback', express.json(), (req, res) => {
+interactionsApp.post('/cs2-callback', express.json(), (req, res) => {
     try {
         const token = req.headers['x-cs2-token'];
         if (token !== process.env.CS2_SECRET_TOKEN) {
@@ -1764,4 +1748,21 @@ app.post('/cs2-callback', express.json(), (req, res) => {
         res.status(500).json({ error: err.message });
     }
 });
+
+interactionsApp.listen(HTTP_PORT, () => {
+    console.log(`Interactions HTTP server listening on port ${HTTP_PORT}`);
+});
+// ────────────────────────────────────────────────────────────────────────────
+
+// 在程式結束時關閉資料庫連接
+process.on('SIGINT', async () => {
+    await pool.end();
+    console.log('資料庫連接已關閉');
+    process.exit(0);
+});
+
+
+
+client.login(process.env.DISCORD_TOKEN);
+
 
