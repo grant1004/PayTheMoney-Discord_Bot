@@ -61,6 +61,8 @@ let scheduleSetupData = new Map();
 
 // 儲存 CS2 demo 查詢暫存
 let cs2DemoData = new Map();
+let cs2PendingInteractions = new Map();
+let cs2SelectedMatches = new Map();
 
 // 生成未來7天的日期選項
 function generateDateOptions() {
@@ -790,87 +792,15 @@ client.on('interactionCreate', async interaction => {
         await interaction.showModal(modal);
     }
     else if (interaction.commandName === 'cs2demos') {
+        const queueChannelId = process.env.CS2_QUEUE_CHANNEL_ID;
+        if (!queueChannelId) return interaction.reply({ content: '❌ CS2 隊列頻道未設定。', ephemeral: true });
+        const queueChannel = client.channels.cache.get(queueChannelId);
+        if (!queueChannel) return interaction.reply({ content: '❌ 找不到 CS2 隊列頻道。', ephemeral: true });
         await interaction.deferReply({ ephemeral: true });
-        try {
-            const steamApiKey = process.env.STEAM_API_KEY;
-            const steamId = process.env.STEAM_ID;
-
-            if (!steamApiKey || !steamId) {
-                return interaction.editReply('❌ Steam API 未設定，請聯繫管理員。');
-            }
-
-            const dateStr = interaction.options.getString('date');
-            const nowTW = new Date(new Date().toLocaleString('en-US', { timeZone: 'Asia/Taipei' }));
-            const targetDate = dateStr ? new Date(dateStr) : nowTW;
-
-            const startOfDay = new Date(targetDate.getFullYear(), targetDate.getMonth(), targetDate.getDate(), 0, 0, 0, 0);
-            const endOfDay = new Date(targetDate.getFullYear(), targetDate.getMonth(), targetDate.getDate(), 23, 59, 59, 999);
-
-            const apiUrl = `https://api.steampowered.com/ICSGOMatch_730/GetMatchHistory/v1/?key=${steamApiKey}&steamid=${steamId}&count=50`;
-            const response = await fetch(apiUrl);
-
-            if (!response.ok) {
-                return interaction.editReply(`❌ Steam API 回傳錯誤：${response.status}`);
-            }
-
-            const data = await response.json();
-
-            if (!data.result || data.result.status !== 1) {
-                return interaction.editReply('❌ 無法取得對戰記錄。請確認 Steam 對戰記錄已設為公開。');
-            }
-
-            const MAP_NAMES = {
-                'de_dust2': 'Dust2', 'de_mirage': 'Mirage', 'de_inferno': 'Inferno',
-                'de_nuke': 'Nuke', 'de_overpass': 'Overpass', 'de_ancient': 'Ancient',
-                'de_anubis': 'Anubis', 'de_vertigo': 'Vertigo', 'de_train': 'Train'
-            };
-
-            const matches = (data.result.matches || []).filter(match => {
-                const d = new Date(new Date(match.matchtime * 1000).toLocaleString('en-US', { timeZone: 'Asia/Taipei' }));
-                return d >= startOfDay && d <= endOfDay;
-            });
-
-            if (matches.length === 0) {
-                const label = targetDate.toLocaleDateString('zh-TW', { timeZone: 'Asia/Taipei' });
-                return interaction.editReply(`📭 ${label} 沒有找到比賽記錄。`);
-            }
-
-            cs2DemoData.set(interaction.user.id, { matches, timestamp: Date.now() });
-
-            const options = matches.map((match, index) => {
-                const matchTime = new Date(match.matchtime * 1000).toLocaleString('zh-TW', { timeZone: 'Asia/Taipei', hour: '2-digit', minute: '2-digit' });
-                const lastRound = match.roundstatsall?.[match.roundstatsall.length - 1];
-                const mapRaw = lastRound?.map || 'unknown';
-                const mapName = MAP_NAMES[mapRaw] || mapRaw;
-                const matchId = String(match.matchid || match.watchablematchinfo?.match_id || index);
-                const reservationId = String(match.watchablematchinfo?.reservation_id || match.reservationid || '');
-
-                return new StringSelectMenuOptionBuilder()
-                    .setLabel(`${mapName} - ${matchTime}`)
-                    .setValue(JSON.stringify({ matchid: matchId, map: mapRaw, time: matchTime, reservationid: reservationId }))
-                    .setDescription(`Match ID: ${matchId.slice(0, 50)}`);
-            });
-
-            const select = new StringSelectMenuBuilder()
-                .setCustomId('cs2_demo_select')
-                .setPlaceholder('選擇要下載的 demo')
-                .setMinValues(1)
-                .setMaxValues(Math.min(options.length, 25))
-                .addOptions(options);
-
-            const row = new ActionRowBuilder().addComponents(select);
-            const dateLabel = targetDate.toLocaleDateString('zh-TW', { timeZone: 'Asia/Taipei' });
-
-            await interaction.editReply({
-                content: `🎮 **${dateLabel} 的 CS2 比賽（${matches.length} 場）**
-選擇要下載的 demo：`,
-                components: [row]
-            });
-
-        } catch (error) {
-            console.error('cs2demos 指令錯誤:', error);
-            await interaction.editReply('❌ 取得比賽記錄時發生錯誤，請稍後再試。');
-        }
+        const dateStr = interaction.options.getString('date') || '';
+        cs2PendingInteractions.set(interaction.user.id, { interaction, requestedAt: Date.now() });
+        await queueChannel.send('CS2_FETCH_MATCHES:' + interaction.user.id + ':' + dateStr);
+        await interaction.editReply('⏳ 正在取得比賽記錄，請稍候...');
     }
 });
 
@@ -941,6 +871,27 @@ client.on('interactionCreate', async interaction => {
         }
     }
     else if (interaction.customId === 'schedule_name_modal') {
+
+    if (interaction.customId === 'cs2_filename_modal') {
+        await interaction.deferReply({ ephemeral: true });
+        try {
+            const selectedMatches = cs2SelectedMatches.get(interaction.user.id);
+            if (!selectedMatches) return interaction.editReply('❌ 資料已過期，請重新選擇。');
+            cs2SelectedMatches.delete(interaction.user.id);
+            const queueChannel = client.channels.cache.get(process.env.CS2_QUEUE_CHANNEL_ID);
+            if (!queueChannel) return interaction.editReply('❌ 找不到隊列頻道。');
+            const downloads = selectedMatches.map((match, i) => ({
+                ...match,
+                filename: interaction.fields.getTextInputValue('filename_' + i) + '.dem'
+            }));
+            await queueChannel.send('CS2_DOWNLOAD:' + JSON.stringify({ matches: downloads }));
+            const list = downloads.map(d => '• ' + d.filename).join('\n');
+            await interaction.editReply('✅ **已加入下載佇列**\n' + list + '\n\n⏳ 本機 Service 將開始下載...');
+        } catch (err) {
+            console.error('cs2_filename_modal 錯誤:', err);
+            await interaction.editReply('❌ 處理檔名時發生錯誤。');
+        }
+    }
         try {
             const eventName = interaction.fields.getTextInputValue('event_name');
             
@@ -1152,50 +1103,30 @@ client.on('interactionCreate', async interaction => {
     }
 
     if (interaction.customId === 'cs2_demo_select') {
-        try {
-            await interaction.deferUpdate();
-
-            const queueChannelId = process.env.CS2_QUEUE_CHANNEL_ID;
-            if (!queueChannelId) {
-                return interaction.editReply({ content: '❌ CS2 隊列頻道未設定。', components: [] });
-            }
-
-            const queueChannel = client.channels.cache.get(queueChannelId);
-            if (!queueChannel) {
-                return interaction.editReply({ content: '❌ 找不到 CS2 隊列頻道。', components: [] });
-            }
-
-            const MAP_NAMES = {
-                'de_dust2': 'Dust2', 'de_mirage': 'Mirage', 'de_inferno': 'Inferno',
-                'de_nuke': 'Nuke', 'de_overpass': 'Overpass', 'de_ancient': 'Ancient',
-                'de_anubis': 'Anubis', 'de_vertigo': 'Vertigo', 'de_train': 'Train'
-            };
-
-            const selectedMatches = interaction.values.map(v => JSON.parse(v));
-
-            const queuePayload = {
-                type: 'CS2_DOWNLOAD',
-                requestedBy: interaction.user.tag,
-                requestedAt: new Date().toISOString(),
-                matches: selectedMatches
-            };
-
-            await queueChannel.send('CS2_DL:' + JSON.stringify(queuePayload));
-
-            const mapsList = selectedMatches.map(m => `• ${MAP_NAMES[m.map] || m.map} (${m.time})`).join('\n');
-
-            await interaction.editReply({
-                content: `✅ **已加入下載佇列（${selectedMatches.length} 場）**
-${mapsList}
-
-⏳ 本機 Service 將開始下載...`,
-                components: []
-            });
-
-        } catch (error) {
-            console.error('cs2_demo_select 錯誤:', error);
-            await interaction.editReply({ content: '❌ 加入佇列時發生錯誤。', components: [] });
-        }
+        const selectedMatches = interaction.values.map(v => JSON.parse(v));
+        cs2SelectedMatches.set(interaction.user.id, selectedMatches);
+        const MAP_NAMES_SM = {
+            'de_dust2': 'Dust2', 'de_mirage': 'Mirage', 'de_inferno': 'Inferno',
+            'de_nuke': 'Nuke', 'de_overpass': 'Overpass', 'de_ancient': 'Ancient',
+            'de_anubis': 'Anubis', 'de_vertigo': 'Vertigo', 'de_train': 'Train'
+        };
+        const modal = new ModalBuilder()
+            .setCustomId('cs2_filename_modal')
+            .setTitle('設定檔案名稱');
+        selectedMatches.forEach((match, i) => {
+            const mapName = MAP_NAMES_SM[match.map] || match.map.replace('de_', '');
+            const d = new Date();
+            const yy = d.toLocaleDateString('zh-TW', { timeZone: 'Asia/Taipei' }).replace(/\//g, '');
+            const defaultName = yy + '_' + mapName + '_' + match.time.replace(':', '');
+            const input = new TextInputBuilder()
+                .setCustomId('filename_' + i)
+                .setLabel(mapName + ' (' + match.time + ')')
+                .setStyle(TextInputStyle.Short)
+                .setValue(defaultName)
+                .setRequired(true);
+            modal.addComponents(new ActionRowBuilder().addComponents(input));
+        });
+        await interaction.showModal(modal);
     }
 });
 
@@ -1778,6 +1709,52 @@ process.on('SIGINT', async () => {
     await pool.end();
     console.log('資料庫連接已關閉');
     process.exit(0);
+});
+
+
+// CS2 demo queue channel listener
+client.on('messageCreate', async message => {
+    if (message.channelId !== process.env.CS2_QUEUE_CHANNEL_ID) return;
+    if (!message.author.bot) return;
+    if (!message.content.startsWith('CS2_MATCHES:')) return;
+    try {
+        const rest = message.content.slice(12);
+        const colonIdx = rest.indexOf(':');
+        const userId = rest.slice(0, colonIdx);
+        const matchesJson = rest.slice(colonIdx + 1);
+        const pending = cs2PendingInteractions.get(userId);
+        if (!pending) return;
+        cs2PendingInteractions.delete(userId);
+        const matches = JSON.parse(matchesJson);
+        if (!matches || matches.length === 0) {
+            return pending.interaction.editReply('📭 沒有找到比賽記錄。');
+        }
+        const MAP_NAMES_ML = {
+            'de_dust2': 'Dust2', 'de_mirage': 'Mirage', 'de_inferno': 'Inferno',
+            'de_nuke': 'Nuke', 'de_overpass': 'Overpass', 'de_ancient': 'Ancient',
+            'de_anubis': 'Anubis', 'de_vertigo': 'Vertigo', 'de_train': 'Train'
+        };
+        const limited = matches.slice(0, 5);
+        const options = limited.map(m => {
+            const mapName = MAP_NAMES_ML[m.map] || m.map.replace('de_', '');
+            return new StringSelectMenuOptionBuilder()
+                .setLabel(mapName + ' - ' + m.time)
+                .setValue(JSON.stringify({ matchid: m.matchid, map: m.map, time: m.time, demoUrl: m.demoUrl }))
+                .setDescription('Match ID: ' + String(m.matchid).slice(-8));
+        });
+        const select = new StringSelectMenuBuilder()
+            .setCustomId('cs2_demo_select')
+            .setPlaceholder('選擇要下載的 demo（最多 5 場）')
+            .setMinValues(1)
+            .setMaxValues(limited.length)
+            .addOptions(options);
+        await pending.interaction.editReply({
+            content: '🎮 **找到 ' + matches.length + ' 場比賽**（顯示最近 ' + limited.length + ' 場）\n選擇要下載的 demo：',
+            components: [new ActionRowBuilder().addComponents(select)]
+        });
+    } catch (err) {
+        console.error('CS2_MATCHES 處理錯誤:', err);
+    }
 });
 
 client.login(process.env.DISCORD_TOKEN);
