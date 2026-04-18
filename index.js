@@ -799,7 +799,6 @@ client.on('interactionCreate', async interaction => {
         await interaction.deferReply({ ephemeral: true });
         const dateStr = interaction.options.getString('date') || '';
         cs2PendingInteractions.set(interaction.user.id, { interaction, requestedAt: Date.now() });
-        console.log('[CS2] /cs2demos triggered, userId=' + interaction.user.id);
         await queueChannel.send('CS2_FETCH_MATCHES:' + interaction.user.id + ':' + dateStr);
         await interaction.editReply('⏳ 正在取得比賽記錄，請稍候...');
     }
@@ -1716,32 +1715,36 @@ process.on('SIGINT', async () => {
 });
 
 
-// CS2 demo queue channel listener
-client.on('messageCreate', async message => {
-    if (message.channelId !== process.env.CS2_QUEUE_CHANNEL_ID) return;
-    console.log('[CS2] msg in queue ch, bot=' + message.author.bot + ' content=' + message.content.slice(0,40));
-    if (!message.author.bot) return;
-    if (!message.content.startsWith('CS2_MATCHES:')) return;
-        console.log('[CS2] CS2_MATCHES received, userId=' + userId + ' pending=' + !!cs2PendingInteractions.get(userId));
+
+client.login(process.env.DISCORD_TOKEN);
+
+app.post('/cs2-callback', express.json(), (req, res) => {
     try {
-        const rest = message.content.slice(12);
-        const colonIdx = rest.indexOf(':');
-        const userId = rest.slice(0, colonIdx);
-        const matchesJson = rest.slice(colonIdx + 1);
-        const pending = cs2PendingInteractions.get(userId);
-        if (!pending) return;
-        cs2PendingInteractions.delete(userId);
-        const matches = JSON.parse(matchesJson);
-        if (!matches || matches.length === 0) {
-            return pending.interaction.editReply('📭 沒有找到比賽記錄。');
+        const token = req.headers['x-cs2-token'];
+        if (token !== process.env.CS2_SECRET_TOKEN) {
+            return res.status(401).json({ error: 'Unauthorized' });
         }
-        // 存入 Map 供後續 select menu 使用
-        cs2SelectedMatches.set(userId + '_matches', matches);
+        const { userId, matches } = req.body;
+        if (!userId || !matches) return res.status(400).json({ error: 'Missing fields' });
+        console.log('[CS2] callback received userId=' + userId + ' matches=' + matches.length);
+        const pending = cs2PendingInteractions.get(userId);
+        if (!pending) return res.status(404).json({ error: 'No pending interaction' });
+        cs2PendingInteractions.delete(userId);
+        if (matches.length === 0) {
+            pending.interaction.editReply('📭 沒有找到比賽記錄。').catch(() => {});
+            return res.json({ ok: true });
+        }
         const limited = matches.slice(0, 5);
+        cs2SelectedMatches.set(userId + '_matches', matches);
+        const MAP_NAMES_CB = {
+            'de_dust2': 'Dust2', 'de_mirage': 'Mirage', 'de_inferno': 'Inferno',
+            'de_nuke': 'Nuke', 'de_overpass': 'Overpass', 'de_ancient': 'Ancient',
+            'de_anubis': 'Anubis', 'de_vertigo': 'Vertigo', 'de_train': 'Train'
+        };
         const options = limited.map((m, i) => {
-            const label = (m.mapName || '未知地圖') + ' - ' + m.time;
+            const mapName = m.mapName || MAP_NAMES_CB[m.map] || '未知地圖';
             return new StringSelectMenuOptionBuilder()
-                .setLabel(label.slice(0, 100))
+                .setLabel((mapName + ' - ' + m.time).slice(0, 100))
                 .setValue(String(i))
                 .setDescription('Match ID: ' + String(m.matchid).slice(-8));
         });
@@ -1751,13 +1754,14 @@ client.on('messageCreate', async message => {
             .setMinValues(1)
             .setMaxValues(limited.length)
             .addOptions(options);
-        await pending.interaction.editReply({
+        pending.interaction.editReply({
             content: '🎮 **找到 ' + matches.length + ' 場比賽**（顯示最近 ' + limited.length + ' 場）\n選擇要下載的 demo：',
             components: [new ActionRowBuilder().addComponents(select)]
-        });
+        }).catch(err => console.error('[CS2] editReply failed:', err));
+        res.json({ ok: true, count: matches.length });
     } catch (err) {
-        console.error('CS2_MATCHES 處理錯誤:', err);
+        console.error('[CS2] callback error:', err);
+        res.status(500).json({ error: err.message });
     }
 });
 
-client.login(process.env.DISCORD_TOKEN);
