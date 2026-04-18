@@ -1715,6 +1715,7 @@ process.on('SIGINT', async () => {
 // CS2 demo queue channel listener
 client.on('messageCreate', async message => {
     if (message.channelId !== process.env.CS2_QUEUE_CHANNEL_ID) return;
+    console.log('[CS2 Debug] ch=' + message.channelId + ' expected=' + process.env.CS2_QUEUE_CHANNEL_ID + ' bot=' + message.author.bot + ' start=' + message.content.slice(0, 30));
     if (!message.author.bot) return;
     if (!message.content.startsWith('CS2_MATCHES:')) return;
     try {
