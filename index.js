@@ -799,6 +799,7 @@ client.on('interactionCreate', async interaction => {
         await interaction.deferReply({ ephemeral: true });
         const dateStr = interaction.options.getString('date') || '';
         cs2PendingInteractions.set(interaction.user.id, { interaction, requestedAt: Date.now() });
+        console.log('[CS2] /cs2demos triggered, userId=' + interaction.user.id);
         await queueChannel.send('CS2_FETCH_MATCHES:' + interaction.user.id + ':' + dateStr);
         await interaction.editReply('⏳ 正在取得比賽記錄，請稍候...');
     }
@@ -1718,8 +1719,10 @@ process.on('SIGINT', async () => {
 // CS2 demo queue channel listener
 client.on('messageCreate', async message => {
     if (message.channelId !== process.env.CS2_QUEUE_CHANNEL_ID) return;
+    console.log('[CS2] msg in queue ch, bot=' + message.author.bot + ' content=' + message.content.slice(0,40));
     if (!message.author.bot) return;
     if (!message.content.startsWith('CS2_MATCHES:')) return;
+        console.log('[CS2] CS2_MATCHES received, userId=' + userId + ' pending=' + !!cs2PendingInteractions.get(userId));
     try {
         const rest = message.content.slice(12);
         const colonIdx = rest.indexOf(':');
