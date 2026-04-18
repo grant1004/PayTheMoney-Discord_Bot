@@ -870,9 +870,7 @@ client.on('interactionCreate', async interaction => {
             });
         }
     }
-    else if (interaction.customId === 'schedule_name_modal') {
-
-    if (interaction.customId === 'cs2_filename_modal') {
+    else if (interaction.customId === 'cs2_filename_modal') {
         await interaction.deferReply({ ephemeral: true });
         try {
             const selectedMatches = cs2SelectedMatches.get(interaction.user.id);
@@ -892,6 +890,7 @@ client.on('interactionCreate', async interaction => {
             await interaction.editReply('❌ 處理檔名時發生錯誤。');
         }
     }
+    else if (interaction.customId === 'schedule_name_modal') {
         try {
             const eventName = interaction.fields.getTextInputValue('event_name');
             
