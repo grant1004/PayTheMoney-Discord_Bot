@@ -1702,13 +1702,14 @@ interactionsApp.post('/interactions', async (req, res) => {
     return res.status(400).json({ error: 'Unknown interaction type' });
 });
 
-interactionsApp.post('/cs2-callback', express.json(), (req, res) => {
+interactionsApp.post('/cs2-callback', (req, res) => {
     try {
         const token = req.headers['x-cs2-token'];
         if (token !== process.env.CS2_SECRET_TOKEN) {
             return res.status(401).json({ error: 'Unauthorized' });
         }
-        const { userId, matches } = req.body;
+        const body = Buffer.isBuffer(req.body) ? JSON.parse(req.body.toString()) : req.body;
+        const { userId, matches } = body;
         if (!userId || !matches) return res.status(400).json({ error: 'Missing fields' });
         console.log('[CS2] callback received userId=' + userId + ' matches=' + matches.length);
         const pending = cs2PendingInteractions.get(userId);
