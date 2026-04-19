@@ -65,6 +65,7 @@ let scheduleSetupData = new Map();
 let cs2DemoData = new Map();
 let cs2PendingInteractions = new Map();
 let cs2SelectedMatches = new Map();
+let cs2ExistingFiles = new Set(); // 本機已存在的 .dem 檔名
 
 // CS2 WebSocket 連線
 let cs2WsClient = null;
@@ -145,6 +146,11 @@ function handleCs2Message(data) {
         if (!pending) return;
         cs2PendingInteractions.delete(userId);
         pending.interaction.editReply(`❌ ${msg.message}`).catch(() => {});
+    }
+
+    else if (type === 'FILE_LIST') {
+        cs2ExistingFiles = new Set(msg.files || []);
+        console.log('[CS2 WS] 已更新檔案清單，共', cs2ExistingFiles.size, '個 .dem');
     }
 }
 
@@ -966,6 +972,16 @@ client.on('interactionCreate', async interaction => {
                 ...match,
                 filename: interaction.fields.getTextInputValue('filename_' + i) + '.dem'
             }));
+
+            // 檢查重複檔名
+            const duplicates = downloads.filter(d => cs2ExistingFiles.has(d.filename));
+            if (duplicates.length > 0) {
+                const list = duplicates.map(d => `• \`${d.filename}\``).join('\n');
+                return interaction.editReply(
+                    `⚠️ **以下檔名已存在，請重新選擇並修改檔名：**\n${list}`
+                );
+            }
+
             cs2PendingInteractions.set(interaction.user.id, { interaction, requestedAt: Date.now() });
             cs2WsSend({ type: 'DOWNLOAD', userId: interaction.user.id, matches: downloads });
             const list = downloads.map(d => '• ' + d.filename).join('\n');
