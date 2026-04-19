@@ -1792,9 +1792,9 @@ const httpServer = http.createServer(interactionsApp);
 const wss = new WebSocketServer({ noServer: true });
 
 httpServer.on('upgrade', (req, socket, head) => {
-    if (req.url === '/cs2-ws') {
-        const token = new URL(req.url, 'http://localhost').searchParams.get('token')
-            || req.headers['x-cs2-token'];
+    const { pathname, searchParams } = new URL(req.url, 'http://localhost');
+    if (pathname === '/cs2-ws') {
+        const token = searchParams.get('token') || req.headers['x-cs2-token'];
         if (token !== process.env.CS2_SECRET_TOKEN) {
             socket.write('HTTP/1.1 401 Unauthorized\r\n\r\n');
             socket.destroy();
