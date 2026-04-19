@@ -1,6 +1,8 @@
 const { Client, GatewayIntentBits, ButtonBuilder, ActionRowBuilder, ButtonStyle,
     ModalBuilder, TextInputBuilder, TextInputStyle, EmbedBuilder, StringSelectMenuBuilder, StringSelectMenuOptionBuilder } = require('discord.js');
 const express = require('express');
+const http = require('http');
+const { WebSocketServer } = require('ws');
 const nacl = require('tweetnacl');
 const { Pool } = require('pg');
 const Anthropic = require('@anthropic-ai/sdk');
@@ -63,6 +65,88 @@ let scheduleSetupData = new Map();
 let cs2DemoData = new Map();
 let cs2PendingInteractions = new Map();
 let cs2SelectedMatches = new Map();
+
+// CS2 WebSocket 連線
+let cs2WsClient = null;
+
+function cs2WsSend(obj) {
+    if (!cs2WsClient || cs2WsClient.readyState !== 1) {
+        console.error('[CS2 WS] 無連線，無法傳送:', obj.type);
+        return false;
+    }
+    cs2WsClient.send(JSON.stringify(obj));
+    return true;
+}
+
+function handleCs2Message(data) {
+    let msg;
+    try { msg = JSON.parse(data); } catch { return; }
+    const { type, userId } = msg;
+    console.log('[CS2 WS] 收到:', type, 'userId=' + userId);
+
+    if (type === 'MATCHES_RESULT') {
+        const pending = cs2PendingInteractions.get(userId);
+        if (!pending) return;
+        cs2PendingInteractions.delete(userId);
+        const { matches } = msg;
+        if (!matches || matches.length === 0) {
+            pending.interaction.editReply('📭 沒有找到比賽記錄。').catch(() => {});
+            return;
+        }
+        const limited = matches.slice(0, 5);
+        cs2SelectedMatches.set(userId + '_matches', matches);
+        const MAP_NAMES_CB = {
+            'de_dust2': 'Dust2', 'de_mirage': 'Mirage', 'de_inferno': 'Inferno',
+            'de_nuke': 'Nuke', 'de_overpass': 'Overpass', 'de_ancient': 'Ancient',
+            'de_anubis': 'Anubis', 'de_vertigo': 'Vertigo', 'de_train': 'Train'
+        };
+        const options = limited.map((m, i) => {
+            const mapName = m.mapName || MAP_NAMES_CB[m.map] || '未知地圖';
+            return new StringSelectMenuOptionBuilder()
+                .setLabel((mapName + ' - ' + m.time).slice(0, 100))
+                .setValue(String(i))
+                .setDescription('Match ID: ' + String(m.matchid).slice(-8));
+        });
+        const select = new StringSelectMenuBuilder()
+            .setCustomId('cs2_demo_select')
+            .setPlaceholder('選擇要下載的 demo（最多 5 場）')
+            .setMinValues(1)
+            .setMaxValues(limited.length)
+            .addOptions(options);
+        pending.interaction.editReply({
+            content: '🎮 **找到 ' + matches.length + ' 場比賽**（顯示最近 ' + limited.length + ' 場）\n選擇要下載的 demo：',
+            components: [new ActionRowBuilder().addComponents(select)]
+        }).catch(err => console.error('[CS2] editReply failed:', err));
+    }
+
+    else if (type === 'PROGRESS') {
+        const pending = cs2PendingInteractions.get(userId);
+        if (!pending) return;
+        const { current, total, pct } = msg;
+        const filled = Math.round(pct / 10);
+        const bar = '█'.repeat(filled) + '░'.repeat(10 - filled);
+        pending.interaction.editReply(
+            `⏳ **下載中...**\n[${bar}] ${pct}%  （${current} / ${total} 個檔案）`
+        ).catch(() => {});
+    }
+
+    else if (type === 'DOWNLOAD_DONE') {
+        const pending = cs2PendingInteractions.get(userId);
+        if (!pending) return;
+        cs2PendingInteractions.delete(userId);
+        const { results } = msg;
+        pending.interaction.editReply(
+            `📁 **下載完成**\n${results.join('\n')}`
+        ).catch(() => {});
+    }
+
+    else if (type === 'ERROR') {
+        const pending = cs2PendingInteractions.get(userId);
+        if (!pending) return;
+        cs2PendingInteractions.delete(userId);
+        pending.interaction.editReply(`❌ ${msg.message}`).catch(() => {});
+    }
+}
 
 // 生成未來7天的日期選項
 function generateDateOptions() {
@@ -792,14 +876,13 @@ client.on('interactionCreate', async interaction => {
         await interaction.showModal(modal);
     }
     else if (interaction.commandName === 'cs2demos') {
-        const queueChannelId = process.env.CS2_QUEUE_CHANNEL_ID;
-        if (!queueChannelId) return interaction.reply({ content: '❌ CS2 隊列頻道未設定。', ephemeral: true });
-        const queueChannel = client.channels.cache.get(queueChannelId);
-        if (!queueChannel) return interaction.reply({ content: '❌ 找不到 CS2 隊列頻道。', ephemeral: true });
+        if (!cs2WsClient || cs2WsClient.readyState !== 1) {
+            return interaction.reply({ content: '❌ 本機 CS2 Service 未連線，請確認 service 是否運行中。', ephemeral: true });
+        }
         await interaction.deferReply({ ephemeral: true });
         const dateStr = interaction.options.getString('date') || '';
         cs2PendingInteractions.set(interaction.user.id, { interaction, requestedAt: Date.now() });
-        await queueChannel.send('CS2_FETCH_MATCHES:' + interaction.user.id + ':' + dateStr);
+        cs2WsSend({ type: 'FETCH_MATCHES', userId: interaction.user.id, date: dateStr });
         await interaction.editReply('⏳ 正在取得比賽記錄，請稍候...');
     }
 });
@@ -876,15 +959,17 @@ client.on('interactionCreate', async interaction => {
             const selectedMatches = cs2SelectedMatches.get(interaction.user.id);
             if (!selectedMatches) return interaction.editReply('❌ 資料已過期，請重新選擇。');
             cs2SelectedMatches.delete(interaction.user.id);
-            const queueChannel = client.channels.cache.get(process.env.CS2_QUEUE_CHANNEL_ID);
-            if (!queueChannel) return interaction.editReply('❌ 找不到隊列頻道。');
+            if (!cs2WsClient || cs2WsClient.readyState !== 1) {
+                return interaction.editReply('❌ 本機 CS2 Service 已斷線，無法下載。');
+            }
             const downloads = selectedMatches.map((match, i) => ({
                 ...match,
                 filename: interaction.fields.getTextInputValue('filename_' + i) + '.dem'
             }));
-            await queueChannel.send('CS2_DOWNLOAD:' + JSON.stringify({ matches: downloads }));
+            cs2PendingInteractions.set(interaction.user.id, { interaction, requestedAt: Date.now() });
+            cs2WsSend({ type: 'DOWNLOAD', userId: interaction.user.id, matches: downloads });
             const list = downloads.map(d => '• ' + d.filename).join('\n');
-            await interaction.editReply('✅ **已加入下載佇列**\n' + list + '\n\n⏳ 本機 Service 將開始下載...');
+            await interaction.editReply('⏳ **開始下載...**\n' + list);
         } catch (err) {
             console.error('cs2_filename_modal 錯誤:', err);
             await interaction.editReply('❌ 處理檔名時發生錯誤。');
@@ -1701,56 +1786,39 @@ interactionsApp.post('/interactions', async (req, res) => {
     return res.status(400).json({ error: 'Unknown interaction type' });
 });
 
-interactionsApp.post('/cs2-callback', (req, res) => {
-    try {
-        const token = req.headers['x-cs2-token'];
+const httpServer = http.createServer(interactionsApp);
+
+// CS2 WebSocket Server
+const wss = new WebSocketServer({ noServer: true });
+
+httpServer.on('upgrade', (req, socket, head) => {
+    if (req.url === '/cs2-ws') {
+        const token = new URL(req.url, 'http://localhost').searchParams.get('token')
+            || req.headers['x-cs2-token'];
         if (token !== process.env.CS2_SECRET_TOKEN) {
-            return res.status(401).json({ error: 'Unauthorized' });
+            socket.write('HTTP/1.1 401 Unauthorized\r\n\r\n');
+            socket.destroy();
+            return;
         }
-        const body = Buffer.isBuffer(req.body) ? JSON.parse(req.body.toString()) : req.body;
-        const { userId, matches } = body;
-        if (!userId || !matches) return res.status(400).json({ error: 'Missing fields' });
-        console.log('[CS2] callback received userId=' + userId + ' matches=' + matches.length);
-        const pending = cs2PendingInteractions.get(userId);
-        if (!pending) return res.status(404).json({ error: 'No pending interaction' });
-        cs2PendingInteractions.delete(userId);
-        if (matches.length === 0) {
-            pending.interaction.editReply('📭 沒有找到比賽記錄。').catch(() => {});
-            return res.json({ ok: true });
-        }
-        const limited = matches.slice(0, 5);
-        cs2SelectedMatches.set(userId + '_matches', matches);
-        const MAP_NAMES_CB = {
-            'de_dust2': 'Dust2', 'de_mirage': 'Mirage', 'de_inferno': 'Inferno',
-            'de_nuke': 'Nuke', 'de_overpass': 'Overpass', 'de_ancient': 'Ancient',
-            'de_anubis': 'Anubis', 'de_vertigo': 'Vertigo', 'de_train': 'Train'
-        };
-        const options = limited.map((m, i) => {
-            const mapName = m.mapName || MAP_NAMES_CB[m.map] || '未知地圖';
-            return new StringSelectMenuOptionBuilder()
-                .setLabel((mapName + ' - ' + m.time).slice(0, 100))
-                .setValue(String(i))
-                .setDescription('Match ID: ' + String(m.matchid).slice(-8));
-        });
-        const select = new StringSelectMenuBuilder()
-            .setCustomId('cs2_demo_select')
-            .setPlaceholder('選擇要下載的 demo（最多 5 場）')
-            .setMinValues(1)
-            .setMaxValues(limited.length)
-            .addOptions(options);
-        pending.interaction.editReply({
-            content: '🎮 **找到 ' + matches.length + ' 場比賽**（顯示最近 ' + limited.length + ' 場）\n選擇要下載的 demo：',
-            components: [new ActionRowBuilder().addComponents(select)]
-        }).catch(err => console.error('[CS2] editReply failed:', err));
-        res.json({ ok: true, count: matches.length });
-    } catch (err) {
-        console.error('[CS2] callback error:', err);
-        res.status(500).json({ error: err.message });
+        wss.handleUpgrade(req, socket, head, (ws) => wss.emit('connection', ws, req));
+    } else {
+        socket.destroy();
     }
 });
 
-interactionsApp.listen(HTTP_PORT, () => {
-    console.log(`Interactions HTTP server listening on port ${HTTP_PORT}`);
+wss.on('connection', (ws) => {
+    console.log('[CS2 WS] 本機 service 已連線');
+    cs2WsClient = ws;
+    ws.on('message', (data) => handleCs2Message(data.toString()));
+    ws.on('close', () => {
+        console.log('[CS2 WS] 本機 service 已斷線');
+        if (cs2WsClient === ws) cs2WsClient = null;
+    });
+    ws.on('error', (err) => console.error('[CS2 WS] 錯誤:', err.message));
+});
+
+httpServer.listen(HTTP_PORT, () => {
+    console.log(`HTTP + WS server listening on port ${HTTP_PORT}`);
 });
 // ────────────────────────────────────────────────────────────────────────────
 
